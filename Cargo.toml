@@ -72,6 +72,8 @@ sp-storage = { version = "22.0.0", default-features = false }
 sp-transaction-pool = { version = "36.0.0", default-features = false }
 sp-version = { version = "39.0.0", default-features = false }
 substrate-wasm-builder = { version = "26.0.1", default-features = false }
+serde = { version = "1.0.214", default-features = false }
+log = { version = "0.4.22", default-features = false }
 
 [profile.release]
 opt-level = 3

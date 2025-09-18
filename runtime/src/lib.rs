@@ -7,6 +7,7 @@ pub mod apis;
 #[cfg(feature = "runtime-benchmarks")]
 mod benchmarks;
 pub mod configs;
+pub mod custom_header;
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -27,6 +28,7 @@ pub use sp_runtime::BuildStorage;
 
 pub mod genesis_config_presets;
 
+use crate::custom_header::CustomHeader;
 /// Opaque types. These are used by the CLI to instantiate machinery that don't need to know
 /// the specifics of the runtime. They can then be made to be agnostic over specific formats
 /// of data like extrinsics, allowing for them to continue syncing the network through upgrades
@@ -37,11 +39,13 @@ pub mod opaque {
 		generic,
 		traits::{BlakeTwo256, Hash as HashT},
 	};
+	use crate::custom_header::CustomHeader;
 
 	pub use sp_runtime::OpaqueExtrinsic as UncheckedExtrinsic;
 
 	/// Opaque block header type.
-	pub type Header = generic::Header<BlockNumber, BlakeTwo256>;
+	// pub type Header = generic::Header<BlockNumber, BlakeTwo256>;
+	pub type Header = CustomHeader<BlockNumber, BlakeTwo256>;
 	/// Opaque block type.
 	pub type Block = generic::Block<Header, UncheckedExtrinsic>;
 	/// Opaque block identifier type.
@@ -135,8 +139,8 @@ pub type BlockNumber = u32;
 pub type Address = MultiAddress<AccountId, ()>;
 
 /// Block header type as expected by this runtime.
-pub type Header = generic::Header<BlockNumber, BlakeTwo256>;
-
+// pub type Header = generic::Header<BlockNumber, BlakeTwo256>;
+pub type Header = CustomHeader<BlockNumber, BlakeTwo256>;
 /// Block type as expected by this runtime.
 pub type Block = generic::Block<Header, UncheckedExtrinsic>;
 

@@ -47,14 +47,54 @@ where
     where
         I: IntoIterator<Item = (Vec<u8>, Vec<u8>)>,
     {
-        // let mut hashdb = KvdbHashDB::<L::Hash>::new(self.kv);
-        // 如果是向有状态的书中插入，当前的是一个空的数据库，不行；这里应该是一直在用的数据库
+        let items: Vec<(Vec<u8>, Vec<u8>)> = items.into_iter().collect();
+        
+        if items.is_empty() {
+            return Ok(self.root.clone());
+        }
+
+        // 检查是否为空树
+        let is_empty_tree = self.root == Default::default() || 
+                        self.root.as_ref().iter().all(|&x| x == 0);
+
+        let all_items = if is_empty_tree {
+            // 空树情况：直接使用新数据
+            println!("Inserting into empty tree");
+            items
+        } else {
+            // 非空树情况：先读取现有数据，然后合并新数据
+            println!("Inserting into existing tree, merging with current data");
+            
+            let existing_items = {
+                let hashdb = KvdbHashDB::<L::Hash>::new(self.kv);
+                let trie = TrieDBBuilder::<L>::new(&hashdb, &self.root).build();
+                
+                let mut existing = std::collections::HashMap::new();
+                let mut iter = trie.iter()?;
+                while let Some(result) = iter.next() {
+                    let (key, value) = result?;
+                    existing.insert(key, value.to_vec());
+                }
+                existing
+            };
+
+            // 合并现有数据和新数据（新数据覆盖现有数据）
+            let mut combined = existing_items;
+            for (key, value) in items {
+                combined.insert(key, value);
+            }
+            
+            println!("Combined {} existing items with new items", combined.len());
+            combined.into_iter().collect()
+        };
+
+        // 重建trie - 从空树开始
         let mut memdb = MemoryDB::<L::Hash, HashKey<L::Hash>, DBValue>::default();
-        let mut root_local: TrieHash<L> = self.root.clone();
+        let mut root_local: TrieHash<L> = Default::default();
 
         {
             let mut trie = TrieDBMutBuilder::<L>::new(&mut memdb, &mut root_local).build();
-            for (k, v) in items {
+            for (k, v) in all_items {
                 trie.insert(&k, &v)?;
             }
         }
@@ -68,6 +108,7 @@ where
             }
         }
 
+        println!("Final root after insert: {:?}", root_local);
         self.root = root_local;
         Ok(self.root.clone())
     }
@@ -178,6 +219,7 @@ mod tests {
     use reference_trie::NoExtensionLayout as Layout;
     use trie_db::TrieHash;
 
+    // 内存中
      #[test]
     fn test_asset_trie_basic_ops() {
         let kv = kvdb_memorydb::create(1);
@@ -212,6 +254,7 @@ mod tests {
         assert_eq!(trie.get(b"k3").unwrap().unwrap(), b"v3");
     }
 
+    // 存到文件中
     #[test]
     fn test_asset_trie_disk_basic_ops() {
         // 项目根目录下的 node 文件夹
@@ -281,6 +324,7 @@ mod tests {
         let _ = fs::remove_dir_all(&node_dir);
     }
 
+    // 数据库关上，再打开
     #[test]
     fn test_asset_trie_disk_persistence() {
         // **持久化验证测试**
@@ -371,5 +415,35 @@ mod tests {
         // 最终清理测试目录
         let _ = fs::remove_dir_all(&node_dir);
         println!("Persistence test completed successfully!");
+    }
+
+    // 往空树插入，再往非空树插入
+    #[test]
+    fn test_batch_insert_on_existing_tree() {
+        let kv = kvdb_memorydb::create(1);
+        let mut trie = AssetTrie::<Layout>::new(&kv, Default::default());
+
+        // 第一次插入
+        let items1 = vec![
+            (b"key1".to_vec(), b"value1".to_vec()),
+            (b"key2".to_vec(), b"value2".to_vec()),
+        ];
+        trie.batch_insert(items1).unwrap();
+        
+        // 验证第一次插入
+        assert_eq!(trie.get(b"key1").unwrap().unwrap(), b"value1");
+        assert_eq!(trie.get(b"key2").unwrap().unwrap(), b"value2");
+
+        // 第二次插入到非空树
+        let items2 = vec![
+            (b"key2".to_vec(), b"value2_updated".to_vec()), // 覆盖现有
+            (b"key3".to_vec(), b"value3".to_vec()),         // 新增
+        ];
+        trie.batch_insert(items2).unwrap();
+        
+        // 验证合并结果
+        assert_eq!(trie.get(b"key1").unwrap().unwrap(), b"value1");        // 保留
+        assert_eq!(trie.get(b"key2").unwrap().unwrap(), b"value2_updated"); // 更新
+        assert_eq!(trie.get(b"key3").unwrap().unwrap(), b"value3");        // 新增
     }
 }

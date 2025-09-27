@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::error::Error;
 
 use hash_db::{HashDB, Hasher, AsHashDB, HashDBRef};
 use kvdb::KeyValueDB;
@@ -129,6 +130,121 @@ where
 
 /// AsHashDB 实现
 impl<'a, H: Hasher> AsHashDB<H, DBValue> for KvdbHashDB<'a, H> {
+    fn as_hash_db(&self) -> &dyn HashDB<H, DBValue> {
+        self
+    }
+
+    fn as_hash_db_mut(&mut self) -> &mut dyn HashDB<H, DBValue> {
+        self
+    }
+}
+
+/// 变更收集器：收集所有读写操作，最后批量应用
+/// 用于在不加载整个树的情况下进行增量修改
+pub struct ChangeCollector<'a, H: Hasher> {
+    kv: &'a dyn KeyValueDB,
+    pub changes: HashMap<Vec<u8>, Option<DBValue>>, // None 表示删除，公开以便调试
+    _marker: PhantomData<H>,
+}
+
+impl<'a, H: Hasher> ChangeCollector<'a, H> {
+    pub fn new(kv: &'a dyn KeyValueDB) -> Self {
+        Self {
+            kv,
+            changes: HashMap::new(),
+            _marker: PhantomData,
+        }
+    }
+    
+    fn make_prefixed_key(prefix: (&[u8], Option<u8>), key: &[u8]) -> Vec<u8> {
+        let mut real_key = Vec::with_capacity(prefix.0.len() + 1 + key.len());
+        real_key.extend_from_slice(prefix.0);
+        if let Some(tag) = prefix.1 {
+            real_key.push(tag);
+        }
+        real_key.extend_from_slice(key);
+        real_key
+    }
+    
+    pub fn apply_changes(&self) -> Result<(), Box<dyn Error>> {
+        if self.changes.is_empty() {
+            return Ok(());
+        }
+        
+        let mut tx = self.kv.transaction();
+        for (key, value_opt) in &self.changes {
+            match value_opt {
+                Some(value) => {
+                    println!("Applying write: key len={}, value len={}", key.len(), value.len());
+                    tx.put(ASSET_DB_COL, key, value);
+                },
+                None => {
+                    println!("Applying delete: key len={}", key.len());
+                    tx.delete(ASSET_DB_COL, key);
+                }
+            }
+        }
+        self.kv.write(tx)?;
+        println!("Applied {} changes to database", self.changes.len());
+        Ok(())
+    }
+}
+
+impl<'a, H: Hasher> HashDB<H, DBValue> for ChangeCollector<'a, H>
+where
+    H::Out: AsRef<[u8]>,
+{
+    fn get(&self, key: &H::Out, prefix: (&[u8], Option<u8>)) -> Option<DBValue> {
+        let real_key = Self::make_prefixed_key(prefix, key.as_ref());
+        
+        // 先查变更记录
+        if let Some(change) = self.changes.get(&real_key) {
+            return change.clone();
+        }
+        
+        // 再查原始数据库
+        self.kv.get(ASSET_DB_COL, &real_key).ok().flatten().map(|v| v.to_vec())
+    }
+
+    fn contains(&self, key: &H::Out, prefix: (&[u8], Option<u8>)) -> bool {
+        HashDB::get(self, key, prefix).is_some()
+    }
+
+    fn insert(&mut self, prefix: (&[u8], Option<u8>), value: &[u8]) -> H::Out {
+        let hash = H::hash(value);
+        self.emplace(hash.clone(), prefix, value.to_vec());
+        hash
+    }
+
+    fn emplace(&mut self, key: H::Out, prefix: (&[u8], Option<u8>), value: DBValue) {
+        let real_key = Self::make_prefixed_key(prefix, key.as_ref());
+        println!("ChangeCollector::emplace - recording write for key len={}, value len={}", real_key.len(), value.len());
+        self.changes.insert(real_key, Some(value));
+    }
+
+    fn remove(&mut self, key: &H::Out, prefix: (&[u8], Option<u8>)) {
+        let real_key = Self::make_prefixed_key(prefix, key.as_ref());
+        println!("ChangeCollector::remove - recording delete for key len={}", real_key.len());
+        self.changes.insert(real_key, None);
+    }
+}
+
+/// HashDBRef 实现
+impl<'a, H: Hasher> HashDBRef<H, DBValue> for ChangeCollector<'a, H>
+where
+    H::Out: AsRef<[u8]>,
+{
+    fn get(&self, key: &H::Out, prefix: (&[u8], Option<u8>)) -> Option<DBValue> {
+        HashDB::get(self, key, prefix)
+    }
+
+    fn contains(&self, key: &H::Out, prefix: (&[u8], Option<u8>)) -> bool {
+        HashDB::contains(self, key, prefix)
+    }
+}
+
+/// AsHashDB 实现
+impl<'a, H: Hasher> AsHashDB<H, DBValue> for ChangeCollector<'a, H> {
     fn as_hash_db(&self) -> &dyn HashDB<H, DBValue> {
         self
     }

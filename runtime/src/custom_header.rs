@@ -25,7 +25,7 @@ use sp_runtime::{
 };
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-use sp_core::U256;
+use sp_core::{ U256, H256 };
 
 /// Abstraction over a block header for a substrate chain.
 #[derive(
@@ -52,7 +52,7 @@ pub struct CustomHeader<Number: Copy + Into<U256> + TryFrom<U256>, Hash: HashT> 
 	/// A chain-specific digest of data useful for light clients or referencing auxiliary data.
 	pub digest: Digest,
 
-	pub asset_root: Hash::Output,
+	pub asset_root: H256,
 }
 
 #[cfg(feature = "serde")]
@@ -146,12 +146,12 @@ where
 		+ TryFrom<U256>,
 	Hash: HashT,
 {
-	pub fn asset_root(&self) -> &Hash::Output {
+	pub fn asset_root(&self) -> &H256 {
 		&self.asset_root
 	}
 
 	/// 设置asset_root的值
-	pub fn set_asset_root(&mut self, root: Hash::Output) {
+	pub fn set_asset_root(&mut self, root: H256) {
 		self.asset_root = root;
 	}
 	

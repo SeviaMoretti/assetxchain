@@ -7,7 +7,10 @@ mod cli;
 mod command;
 mod rpc;
 mod service;
-mod reth_mpt;
+mod trie_db_mpt;
+mod kvdb_hashdb;
+mod dataasset;
+mod asset_trie;
 
 fn main() -> sc_cli::Result<()> {
 	command::run()

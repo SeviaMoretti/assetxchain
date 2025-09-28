@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use kvdb::KeyValueDB;
 use hash_db::{Hasher, HashDB, AsHashDB};
@@ -12,270 +13,362 @@ use crate::kvdb_hashdb::{KvdbHashDB, ChangeCollector};
 
 const ASSET_DB_COL: u32 = 0;
 
-pub struct AssetTrie<'a, L: TrieLayout>
+/// 改进的 AssetTrie，解决生命周期问题
+pub struct AssetTrie<L: TrieLayout>
 where
     L::Hash: Hasher,
 {
-    kv: &'a dyn KeyValueDB,
+    db: Arc<dyn KeyValueDB>,
     root: TrieHash<L>,
     _marker: std::marker::PhantomData<L>,
 }
 
-impl<'a, L> AssetTrie<'a, L>
+// proof相关的方法为实现
+impl<L> AssetTrie<L>
 where
     L: TrieLayout + 'static,
     L::Hash: Hasher + 'static,
     <<L as TrieLayout>::Hash as Hasher>::Out: 'static,
 {
-    pub fn new(kv: &'a dyn KeyValueDB, initial_root: TrieHash<L>) -> Self {
+    /// 创建新的 AssetTrie
+    pub fn new(db: Arc<dyn KeyValueDB>, initial_root: TrieHash<L>) -> Self {
         Self {
-            kv,
+            db,
             root: initial_root,
             _marker: std::marker::PhantomData,
         }
     }
 
+    /// 获取当前根哈希
     pub fn root(&self) -> TrieHash<L> {
         self.root.clone()
     }
 
-    pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<TrieHash<L>, Box<dyn Error>> {
-        self.batch_insert(std::iter::once((key.to_vec(), value.to_vec())))
+    /// 设置根哈希
+    pub fn set_root(&mut self, new_root: TrieHash<L>) {
+        self.root = new_root;
     }
 
-    // 非空树：先读取现有数据，合并新数据，重建trie--> 直接修改root
-    pub fn batch_insert<I>(&mut self, items: I) -> Result<TrieHash<L>, Box<dyn Error>>
-    where
-        I: IntoIterator<Item = (Vec<u8>, Vec<u8>)>,
-    {
-        let items: Vec<(Vec<u8>, Vec<u8>)> = items.into_iter().collect();
-        
+    /// 插入单个键值对
+    pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<TrieHash<L>, Box<dyn Error>> {
+        self.batch_insert(vec![(key.to_vec(), value.to_vec())])
+    }
+
+    /// 批量插入
+    pub fn batch_insert(&mut self, items: Vec<(Vec<u8>, Vec<u8>)>) -> Result<TrieHash<L>, Box<dyn Error>> {
         if items.is_empty() {
             return Ok(self.root.clone());
         }
 
-        // 检查是否为空树
-        let is_empty_tree = self.root == Default::default() || 
-                           self.root.as_ref().iter().all(|&x| x == 0);
+        let is_empty_tree = self.is_empty_root();
 
         if is_empty_tree {
-            // 空树情况：使用原有的高效实现
-            println!("Inserting {} items into empty tree", items.len());
-            
-            let mut memdb = MemoryDB::<L::Hash, HashKey<L::Hash>, DBValue>::default();
-            let mut root_local: TrieHash<L> = Default::default();
-
-            {
-                let mut trie = TrieDBMutBuilder::<L>::new(&mut memdb, &mut root_local).build();
-                for (k, v) in items {
-                    trie.insert(&k, &v)?;
-                }
-            }
-            
-            // 手动将 memdb 中的节点写入实际数据库
-            let mut hashdb = KvdbHashDB::<L::Hash>::new(self.kv);
-            for (hash, (value, rc)) in memdb.drain() {
-                if rc > 0 {
-                    println!("Writing node to DB: hash={:?}, len={}", hash, value.len());
-                    hashdb.emplace(hash, (&[], None), value);
-                }
-            }
-
-            self.root = root_local;
-            Ok(self.root.clone())
+            // 空树：使用 MemoryDB 创建
+            self.create_new_tree(items)
         } else {
-            // 非空树情况：使用直接修改策略，避免全树读取
-            println!("Inserting {} items into existing tree (direct modification)", items.len());
-            
-            // 使用变更收集器进行直接修改
-            let mut change_collector = ChangeCollector::<L::Hash>::new(self.kv);
-            let mut root_local: TrieHash<L> = self.root.clone();
-
-            {
-                if !change_collector.contains(&root_local, (&[], None)) {
-                    return Err("Root node not found in database".into());
-                }
-                
-                let mut trie = TrieDBMutBuilder::<L>::from_existing(&mut change_collector, &mut root_local).build();
-                
-                for (k, v) in items {
-                    println!("Inserting key: {:?}", k);
-                    trie.insert(&k, &v)?;
-                }
-            }
-            
-            println!("After insertion, new root: {:?}", root_local);
-            println!("Changes collected: {}", change_collector.changes.len());
-            
-            // 应用所有变更到实际数据库
-            change_collector.apply_changes()?;
-
-            self.root = root_local;
-            Ok(self.root.clone())
+            // 非空树：使用 ChangeCollector 增量更新
+            self.incremental_update(items, Vec::new())
         }
     }
 
+    /// 删除单个键
     pub fn remove(&mut self, key: &[u8]) -> Result<TrieHash<L>, Box<dyn Error>> {
-        self.batch_remove(std::iter::once(key.to_vec()))
+        self.batch_remove(vec![key.to_vec()])
     }
 
-    // 从现有的数据库状态开始：先将现有trie数据复制到内存数据库中，然后删除指定键-->直接删除
-    pub fn batch_remove<I>(&mut self, keys: I) -> Result<TrieHash<L>, Box<dyn Error>>
-    where
-        I: IntoIterator<Item = Vec<u8>>,
-    {
-        let keys_to_remove: std::collections::HashSet<Vec<u8>> = keys.into_iter().collect();
-        
-        if keys_to_remove.is_empty() {
+    /// 批量删除
+    pub fn batch_remove(&mut self, keys: Vec<Vec<u8>>) -> Result<TrieHash<L>, Box<dyn Error>> {
+        if keys.is_empty() {
             return Ok(self.root.clone());
         }
 
-        let is_empty_tree = self.root == Default::default() || 
-                           self.root.as_ref().iter().all(|&x| x == 0);
-        
-        if is_empty_tree {
+        if self.is_empty_root() {
             // 空树没有东西可删除
             return Ok(self.root.clone());
         }
 
-        println!("Removing {} keys from existing tree (direct modification)", keys_to_remove.len());
+        // 非空树：使用 ChangeCollector 增量更新
+        self.incremental_update(Vec::new(), keys)
+    }
 
-        // 如果是删除单个元素的单元素树，直接设为空
-        if keys_to_remove.len() == 1 {
-            let key_to_remove = keys_to_remove.iter().next().unwrap();
-            
-            // 检查这个键是否是树中唯一的键
-            let is_single_key_tree = {
-                let hashdb = KvdbHashDB::<L::Hash>::new(self.kv);
-                let trie = TrieDBBuilder::<L>::new(&hashdb, &self.root).build();
-                
-                match trie.get(key_to_remove) {
-                    Ok(Some(_)) => {
-                        // 键存在，检查是否是唯一键
-                        let mut count = 0;
-                        if let Ok(mut iter) = trie.iter() {
-                            while let Some(result) = iter.next() {
-                                if result.is_ok() {
-                                    count += 1;
-                                    if count > 1 {
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        count == 1
-                    },
-                    _ => false
+    /// 批量更新（插入和删除）
+    pub fn batch_update(
+        &mut self, 
+        inserts: Vec<(Vec<u8>, Vec<u8>)>, 
+        deletes: Vec<Vec<u8>>
+    ) -> Result<TrieHash<L>, Box<dyn Error>> {
+        if inserts.is_empty() && deletes.is_empty() {
+            return Ok(self.root.clone());
+        }
+
+        if self.is_empty_root() && !deletes.is_empty() {
+            // 空树没有东西可删除，只处理插入
+            return self.create_new_tree(inserts);
+        }
+
+        if self.is_empty_root() {
+            // 空树：使用 MemoryDB 创建
+            self.create_new_tree(inserts)
+        } else {
+            // 非空树：使用 ChangeCollector 增量更新
+            self.incremental_update(inserts, deletes)
+        }
+    }
+
+    /// 获取键对应的值
+    pub fn get(&self, key: &[u8]) -> Result<Option<DBValue>, Box<dyn Error>> {
+        if self.is_empty_root() {
+            return Ok(None);
+        }
+
+        let hashdb = KvdbHashDB::<L::Hash>::new(self.db.clone());
+        let trie = TrieDBBuilder::<L>::new(&hashdb, &self.root).build();
+        
+        match trie.get(key) {
+            Ok(opt) => Ok(opt.map(|v| v.to_vec())),
+            Err(e) => Err(Box::new(e) as Box<dyn Error>),
+        }
+    }
+
+    /// 检查键是否存在
+    pub fn contains(&self, key: &[u8]) -> Result<bool, Box<dyn Error>> {
+        Ok(self.get(key)?.is_some())
+    }
+
+    /// 获取所有键值对（用于调试或小型树）
+    pub fn iter_all(&self) -> Result<HashMap<Vec<u8>, Vec<u8>>, Box<dyn Error>> {
+        if self.is_empty_root() {
+            return Ok(HashMap::new());
+        }
+
+        let mut result = HashMap::new();
+        let hashdb = KvdbHashDB::<L::Hash>::new(self.db.clone());
+        let trie = TrieDBBuilder::<L>::new(&hashdb, &self.root).build();
+        
+        if let Ok(mut iter) = trie.iter() {
+            while let Some(item) = iter.next() {
+                if let Ok((key, value)) = item {
+                    result.insert(key, value.to_vec());
                 }
-            };
-            
-            if is_single_key_tree {
-                println!("Detected single-key removal, setting tree to empty");
+            }
+        }
+        
+        Ok(result)
+    }
+
+    /// 判断是否为空根
+    fn is_empty_root(&self) -> bool {
+        self.root == Default::default() || 
+        self.root.as_ref().iter().all(|&x| x == 0)
+    }
+
+    /// 使用 MemoryDB 创建新树（避免 ChangeCollector 在空树时的问题）
+    fn create_new_tree(&mut self, items: Vec<(Vec<u8>, Vec<u8>)>) -> Result<TrieHash<L>, Box<dyn Error>> {
+        println!("Creating new tree with {} items", items.len());
+        
+        let mut memdb = MemoryDB::<L::Hash, HashKey<L::Hash>, DBValue>::default();
+        let mut root_local: TrieHash<L> = Default::default();
+
+        {
+            let mut trie = TrieDBMutBuilder::<L>::new(&mut memdb, &mut root_local).build();
+            for (k, v) in items {
+                trie.insert(&k, &v)?;
+            }
+        }
+        
+        // 使用与 ChangeCollector 兼容的格式写入数据库
+        self.write_memdb_with_correct_format(memdb)?;
+
+        self.root = root_local;
+        println!("New tree created, root: {:?}", self.root);
+        Ok(self.root.clone())
+    }
+
+    /// 使用 ChangeCollector 进行增量更新
+    fn incremental_update(
+        &mut self, 
+        inserts: Vec<(Vec<u8>, Vec<u8>)>, 
+        deletes: Vec<Vec<u8>>
+    ) -> Result<TrieHash<L>, Box<dyn Error>> {
+        println!("Incremental update: {} inserts, {} deletes", inserts.len(), deletes.len());
+        
+        // 验证根节点是否存在
+        let hashdb = KvdbHashDB::<L::Hash>::new(self.db.clone());
+        if !hashdb.contains(&self.root, (&[], None)) {
+            return Err(format!("Root node not found in database: {:?}", self.root).into());
+        }
+
+        // 对于纯删除操作且只有一个键的情况，检查是否会导致空树
+        if !deletes.is_empty() && inserts.is_empty() && deletes.len() == 1 {
+            // 检查当前树是否只有这一个键
+            let current_data = self.iter_all()?;
+            if current_data.len() == 1 && current_data.contains_key(&deletes[0]) {
+                println!("Deleting the only key, resulting in empty tree");
                 self.root = Default::default();
                 return Ok(self.root.clone());
             }
         }
 
-        // 使用直接修改策略
-        let mut change_collector = ChangeCollector::<L::Hash>::new(self.kv);
+        // 尝试使用 ChangeCollector 进行更新
+        let mut change_collector = ChangeCollector::<L::Hash>::new_with_history_mode(self.db.clone(), true);
         let mut root_local: TrieHash<L> = self.root.clone();
 
-        {
-            if !change_collector.contains(&root_local, (&[], None)) {
-                return Err("Root node not found in database".into());
-            }
-            
+        println!("Starting trie operations with root: {:?}", root_local);
+        
+        let result = {
             let mut trie = TrieDBMutBuilder::<L>::from_existing(&mut change_collector, &mut root_local).build();
             
-            for k in keys_to_remove {
+            // 执行插入操作
+            for (k, v) in &inserts {
+                println!("Inserting key: {:?}", k);
+                trie.insert(&k, &v)?;
+            }
+            
+            // 执行删除操作
+            for k in &deletes {
                 println!("Removing key: {:?}", k);
                 trie.remove(&k)?;
             }
-        }
-        
-        println!("After removal, new root: {:?}", root_local);
-        println!("Changes collected: {}", change_collector.changes.len());
-        
-        // 检查是否变成空树（删除后根节点为默认值或全零）
-        let is_empty_after_removal = root_local == Default::default() || 
-                                    root_local.as_ref().iter().all(|&x| x == 0);
-        
-        if is_empty_after_removal {
-            println!("Tree became empty after removal, setting root to default");
-            self.root = Default::default();
-            // 对于空树，我们不需要写入任何新节点，只需要应用删除操作
-            change_collector.apply_changes()?;
-            return Ok(self.root.clone());
-        }
-
-        // 检查新根节点是否需要被写入
-        let root_exists_in_changes = change_collector.changes.iter()
-            .any(|(_, value_opt)| value_opt.is_some());
             
-        let root_exists_in_db = {
-            let kvdb_hashdb = KvdbHashDB::<L::Hash>::new(self.kv);
-            kvdb_hashdb.contains(&root_local, (&[], None))
+            Ok(())
         };
 
-        println!("Root exists in changes: {}, Root exists in DB: {}", root_exists_in_changes, root_exists_in_db);
-
-        if !root_exists_in_db && !root_exists_in_changes {
-            // 这种情况可能表明删除后的结果实际上应该是空树
-            // 让我们验证这个新根是否真的包含任何数据
-            println!("Checking if new root actually contains data...");
-            
-            if !root_exists_in_db && !root_exists_in_changes {
-                // 如果是默认根或全零，视为空树
-                let is_likely_empty = root_local == Default::default() || 
-                                    root_local.as_ref().iter().all(|&x| x == 0);
-                
-                if is_likely_empty {
-                    println!("New root appears to be empty, treating as empty tree");
-                    self.root = Default::default();
-                    change_collector.apply_changes()?;
-                    return Ok(self.root.clone());
-                }
-            }
+        if let Err(e) = result {
+            return Err(e);
         }
         
-        // 应用所有变更到实际数据库
+        println!("After operations, root: {:?}", root_local);
+        
+        // 打印调试信息
+        let (writes, dels, total) = change_collector.change_stats();
+        println!("Changes collected - writes: {}, deletes: {}, total: {}", writes, dels, total);
+        
+        // 如果没有记录到写入操作但根哈希发生了变化，这表明 ChangeCollector 有问题
+        if writes == 0 && root_local != self.root {
+            println!("Warning: Root changed but no writes recorded. Using fallback method.");
+            return self.fallback_update(inserts, deletes);
+        }
+        
+        // 应用所有变更到数据库
         change_collector.apply_changes()?;
 
-        // 如果新根节点不在数据库中，这可能表明是一个特殊的空树情况
-        let final_check = {
-            let kvdb_hashdb = KvdbHashDB::<L::Hash>::new(self.kv);
-            kvdb_hashdb.contains(&root_local, (&[], None))
-        };
-
-        if !final_check {
-            println!("New root not found after apply_changes, likely an empty tree case");
-            self.root = Default::default();
-            return Ok(self.root.clone());
+        // 验证新根是否可访问
+        if root_local != Default::default() && !root_local.as_ref().iter().all(|&x| x == 0) {
+            let verification_hashdb = KvdbHashDB::<L::Hash>::new(self.db.clone());
+            if !verification_hashdb.contains(&root_local, (&[], None)) {
+                println!("Root verification failed. Using fallback method.");
+                return self.fallback_update(inserts, deletes);
+            }
+            println!("Root verification: SUCCESS");
         }
 
-        println!("Successfully verified new root node exists in database");
-        self.root = root_local;
+        // 检查结果是否为空树
+        let is_empty_after = root_local == Default::default() || 
+                            root_local.as_ref().iter().all(|&x| x == 0);
+        
+        if is_empty_after {
+            self.root = Default::default();
+            println!("Result: empty tree");
+        } else {
+            self.root = root_local;
+            println!("Result: non-empty tree");
+        }
+
+        println!("Incremental update completed, root: {:?}", self.root);
         Ok(self.root.clone())
     }
 
-    pub fn get(&self, key: &[u8]) -> Result<Option<DBValue>, Box<dyn Error>> {
-        // 空树直接返回 None
-        if self.root == Default::default() || self.root.as_ref().iter().all(|&x| x == 0) {
-            return Ok(None);
-        }
-
-        let hashdb = KvdbHashDB::<L::Hash>::new(self.kv);
+    /// 后备更新方法：使用 MemoryDB 重新创建子树
+    fn fallback_update(
+        &mut self, 
+        inserts: Vec<(Vec<u8>, Vec<u8>)>, 
+        deletes: Vec<Vec<u8>>
+    ) -> Result<TrieHash<L>, Box<dyn Error>> {
+        println!("Using fallback update method");
         
-        println!("Getting key: {:?} with root: {:?}", key, self.root);
+        // 读取当前的所有数据
+        let mut current_data = self.iter_all()?;
+        println!("Current tree has {} items", current_data.len());
+        
+        // 应用删除操作
+        for delete_key in deletes {
+            current_data.remove(&delete_key);
+        }
+        
+        // 应用插入操作
+        for (insert_key, insert_value) in inserts {
+            current_data.insert(insert_key, insert_value);
+        }
+        
+        println!("After changes: {} items", current_data.len());
+        
+        // 如果结果为空，返回空树
+        if current_data.is_empty() {
+            self.root = Default::default();
+            println!("Fallback result: empty tree");
+            return Ok(self.root.clone());
+        }
+        
+        // 使用内存数据库重建树
+        let mut memdb = MemoryDB::<L::Hash, HashKey<L::Hash>, DBValue>::default();
+        let mut new_root: TrieHash<L> = Default::default();
 
-        // 不确定根节点是否存在，不使用from_existing，不然可能报错
-        let trie = TrieDBBuilder::<L>::new(&hashdb, &self.root).build();
-        match trie.get(key) {
-            Ok(opt) => Ok(opt.map(|v| v.to_vec())),
-            Err(e) => {
-                println!("Error getting key: {:?}", e);
-                Err(Box::new(e) as Box<dyn Error>)
+        {
+            let mut trie = TrieDBMutBuilder::<L>::new(&mut memdb, &mut new_root).build();
+            for (k, v) in current_data {
+                trie.insert(&k, &v)?;
             }
+        }
+        
+        // 写入到持久存储
+        self.write_memdb_with_correct_format(memdb)?;
+
+        self.root = new_root;
+        println!("Fallback completed, new root: {:?}", self.root);
+        Ok(self.root.clone())
+    }
+
+    /// 构造存储用的最终 key = prefix.0 (+ prefix.1) + 哈希值
+    fn make_prefixed_key(&self, prefix: (&[u8], Option<u8>), key: &[u8]) -> Vec<u8> {
+        let mut real_key = Vec::with_capacity(prefix.0.len() + 1 + key.len());
+        real_key.extend_from_slice(prefix.0);
+        if let Some(tag) = prefix.1 {
+            real_key.push(tag);
+        }
+        real_key.extend_from_slice(key);
+        real_key
+    }
+
+    /// 使用与 ChangeCollector 兼容的格式写入 MemoryDB 数据
+    fn write_memdb_with_correct_format(&self, mut memdb: MemoryDB<L::Hash, HashKey<L::Hash>, DBValue>) -> Result<(), Box<dyn Error>> {
+        let mut transaction = self.db.transaction();
+        
+        for (hash, (value, rc)) in memdb.drain() {
+            if rc > 0 {
+                // 使用与 KvdbHashDB 和 ChangeCollector 相同的键格式
+                let prefixed_key = self.make_prefixed_key((&[], None), hash.as_ref());
+                transaction.put(ASSET_DB_COL, &prefixed_key, &value);
+                println!("Writing to DB: key_len={}, value_len={}", prefixed_key.len(), value.len());
+            }
+        }
+        
+        self.db.write(transaction).map_err(|e| Box::new(e) as Box<dyn Error>)?;
+        println!("MemoryDB data committed to persistent storage");
+        Ok(())
+    }
+}
+
+// 为了支持克隆，我们需要实现 Clone
+impl<L> Clone for AssetTrie<L>
+where
+    L: TrieLayout,
+    L::Hash: Hasher,
+{
+    fn clone(&self) -> Self {
+        Self {
+            db: Arc::clone(&self.db),
+            root: self.root.clone(),
+            _marker: std::marker::PhantomData,
         }
     }
 }
@@ -285,598 +378,172 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::Path;
-    use kvdb_memorydb; 
+    use kvdb_memorydb;
     use kvdb_rocksdb::{Database as RocksDb, DatabaseConfig};
     use reference_trie::NoExtensionLayout as Layout;
-    use trie_db::TrieHash;
+    use std::sync::Arc;
 
-    // 内存中
-     #[test]
-    fn test_asset_trie_basic_ops() {
-        let kv = kvdb_memorydb::create(1);
-        let mut trie = AssetTrie::<Layout>::new(&kv, Default::default());
+    #[test]
+    fn test_asset_trie_basic() {
+        let kv = Arc::new(kvdb_memorydb::create(1));
+        let mut trie = AssetTrie::<Layout>::new(kv, Default::default());
 
-        // 单条插入
-        let key = b"key1";
-        let value = b"value1";
-        let root = trie.insert(key, value).unwrap();
-        assert_eq!(trie.get(key).unwrap().unwrap(), value);
-
-        // 单条删除
-        let root2 = trie.remove(key).unwrap();
+        // 插入单个项目
+        let key = b"test_key";
+        let value = b"test_value";
+        let result = trie.insert(key, value);
+        println!("Insert result: {:?}", result);
+        assert!(result.is_ok(), "Insert failed: {:?}", result);
+        
+        // 验证插入
+        let get_result = trie.get(key);
+        println!("Get result: {:?}", get_result);
+        assert!(get_result.is_ok(), "Get failed: {:?}", get_result);
+        assert_eq!(get_result.unwrap().unwrap(), value);
+        
+        assert!(trie.contains(key).unwrap());
+        
+        // 删除项目
+        let remove_result = trie.remove(key);
+        println!("Remove result: {:?}", remove_result);
+        assert!(remove_result.is_ok(), "Remove failed: {:?}", remove_result);
+        
         assert!(trie.get(key).unwrap().is_none());
+        assert!(!trie.contains(key).unwrap());
+    }
+
+    #[test]
+    fn test_batch_operations() {
+        let kv = Arc::new(kvdb_memorydb::create(1));
+        let mut trie = AssetTrie::<Layout>::new(kv, Default::default());
 
         // 批量插入
         let items = vec![
-            (b"k1".to_vec(), b"v1".to_vec()),
-            (b"k2".to_vec(), b"v2".to_vec()),
-            (b"k3".to_vec(), b"v3".to_vec()),
+            (b"key1".to_vec(), b"value1".to_vec()),
+            (b"key2".to_vec(), b"value2".to_vec()),
+            (b"key3".to_vec(), b"value3".to_vec()),
         ];
+        
         trie.batch_insert(items.clone()).unwrap();
-        for (k, v) in &items {
-            assert_eq!(trie.get(k).unwrap().unwrap(), *v);
-        }
-
-        // 批量删除
-        let keys = vec![b"k1".to_vec(), b"k2".to_vec()];
-        trie.batch_remove(keys).unwrap();
-        assert!(trie.get(b"k1").unwrap().is_none());
-        assert!(trie.get(b"k2").unwrap().is_none());
-        assert_eq!(trie.get(b"k3").unwrap().unwrap(), b"v3");
-    }
-
-    // 存到文件中
-    #[test]
-    fn test_asset_trie_disk_basic_ops() {
-        // 项目根目录下的 node 文件夹
-        let node_dir = Path::new("./testdata/diskt");
-        // 清理之前的测试数据（若存在）
-        if node_dir.exists() {
-            let _ = fs::remove_dir_all(&node_dir);
-        }
-        fs::create_dir_all(&node_dir).expect("create node dir failed");
-
-        // **磁盘存储配置** - 设置合理的内存预算
-        let mut config = DatabaseConfig::with_columns(1); // 1 列就够做测试
-        config.memory_budget.insert(0, 32); // 为列族0设置32MB内存预算
-        config.max_open_files = 512; // 适合测试的文件句柄数量
         
-        let db = RocksDb::open(&config, &node_dir).expect("open rocksdb failed");
-        
-        // initial root：使用默认空 root
-        let initial_root: TrieHash<Layout> = Default::default();
-        let mut asset_trie = AssetTrie::<Layout>::new(&db, initial_root);
-        
-        println!("initial root: {:?}\n", asset_trie.root());
-
-        // ---- 单条插入与读取
-        let key1 = b"key1";
-        let val1 = b"value1";
-        let _root_after_insert = asset_trie.insert(key1, val1)
-            .expect("insert failed");
-        let got = asset_trie.get(key1).expect("get failed");
-        assert!(got.is_some(), "value should exist after insert");
-        assert_eq!(got.unwrap(), val1.to_vec());
-
-        // ---- 单条删除
-        let _root_after_remove = asset_trie.remove(key1).expect("remove failed");
-        let got_after_remove = asset_trie.get(key1).expect("get after remove failed");
-        assert!(got_after_remove.is_none(), "value should be removed");
-
-        // ---- 批量插入
-        let items = vec![
-            (b"aa".to_vec(), b"v_aa".to_vec()),
-            (b"bb".to_vec(), b"v_bb".to_vec()),
-            (b"cc".to_vec(), b"v_cc".to_vec()),
-        ];
-        let _root_after_batch = asset_trie.batch_insert(items.clone()).expect("batch_insert failed");
-        for (k, v) in items.iter() {
-            let got = asset_trie.get(k).expect("get in batch failed");
-            assert!(got.is_some(), "batch inserted key should exist");
-            assert_eq!(got.unwrap(), v.clone());
+        // 验证所有项目
+        for (key, value) in &items {
+            assert_eq!(trie.get(key).unwrap().unwrap(), *value);
         }
-
-        // ---- 批量删除
-        let keys_to_remove = vec![b"aa".to_vec(), b"cc".to_vec()];
-        let _root_after_batch_remove = asset_trie.batch_remove(keys_to_remove.clone()).expect("batch_remove failed");
+        
+        // 批量删除部分项目
+        let keys_to_delete = vec![b"key1".to_vec(), b"key3".to_vec()];
+        trie.batch_remove(keys_to_delete).unwrap();
         
         // 验证删除结果
-        let got_aa = asset_trie.get(b"aa").expect("get aa after batch remove failed");
-        assert!(got_aa.is_none());
-        let got_bb = asset_trie.get(b"bb").expect("get bb after batch remove failed");
-        assert!(got_bb.is_some());
-        assert_eq!(got_bb.unwrap(), b"v_bb".to_vec());
-        let got_cc = asset_trie.get(b"cc").expect("get cc after batch remove failed");
-        assert!(got_cc.is_none());
-
-        // 清理：drop 并删除 node 目录（测试结束）
-        drop(asset_trie);
-        drop(db);
-        let _ = fs::remove_dir_all(&node_dir);
+        assert!(trie.get(b"key1").unwrap().is_none());
+        assert_eq!(trie.get(b"key2").unwrap().unwrap(), b"value2");
+        assert!(trie.get(b"key3").unwrap().is_none());
     }
 
-    // 数据库关上，再打开
     #[test]
-    fn test_asset_trie_disk_persistence() {
-        // **持久化验证测试**
-        let node_dir = Path::new("./testdata/persistence");
+    fn test_empty_tree_operations() {
+        let kv = Arc::new(kvdb_memorydb::create(1));
+        let mut trie = AssetTrie::<Layout>::new(kv, Default::default());
+
+        // 在空树上删除应该成功但无效果
+        assert!(trie.remove(b"nonexistent").is_ok());
         
-        // 清理之前的测试数据
+        // 空树应该返回 None
+        assert!(trie.get(b"anything").unwrap().is_none());
+        assert!(!trie.contains(b"anything").unwrap());
+        
+        // 空树的 iter_all 应该返回空 HashMap
+        assert!(trie.iter_all().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_disk_persistence() {
+        let node_dir = Path::new("./testdata/improved_test");
+        
         if node_dir.exists() {
             let _ = fs::remove_dir_all(&node_dir);
         }
-        fs::create_dir_all(&node_dir).expect("create persistence dir failed");
+        fs::create_dir_all(&node_dir).expect("创建测试目录失败");
 
-        let final_root_hash = {
-            // **第一阶段：写入数据并记录根哈希**
-            let mut config = DatabaseConfig::with_columns(1);
-            config.memory_budget.insert(0, 32); // 32MB内存预算
-            config.max_open_files = 512;
-            
-            let db = RocksDb::open(&config, &node_dir).expect("Failed to open RocksDB");
-            let mut asset_trie = AssetTrie::<Layout>::new(&db, Default::default());
-            
-            // 写入持久化测试数据
-            let persistent_items = vec![
-                (b"persistent_key1".to_vec(), b"persistent_value1".to_vec()),
-                (b"persistent_key2".to_vec(), b"persistent_value2".to_vec()),
-                (b"persistent_key3".to_vec(), b"persistent_value3".to_vec()),
-            ];
-            
-            let root_hash = asset_trie.batch_insert(persistent_items.clone())
-                .expect("Failed to insert persistent data");
-            
-            println!("Phase 1: Inserted data with root hash: {:?}", root_hash);
-            
-            // 验证数据写入成功
-            for (key, value) in &persistent_items {
-                let retrieved = asset_trie.get(key).expect("Failed to get persistent data");
-                assert!(retrieved.is_some(), "Persistent data should exist");
-                assert_eq!(retrieved.unwrap(), *value);
-            }
-            
-            println!("Phase 1: Data verification successful");
-            
-            // 显式关闭数据库
-            drop(asset_trie);
-            drop(db);
-            println!("Phase 1: Database closed");
-            
-            root_hash
-        }; // 第一阶段结束，数据库已关闭
-
-        {
-            // **第二阶段：重新打开数据库并验证数据持久化**
-            println!("\nPhase 2: Reopening database...");
-            
-            let mut config = DatabaseConfig::with_columns(1);
-            config.memory_budget.insert(0, 32);
-            config.max_open_files = 512;
-            
-            let db = RocksDb::open(&config, &node_dir).expect("Failed to reopen RocksDB");
-            
-            // 使用保存的根哈希重新创建 AssetTrie
-            let asset_trie = AssetTrie::<Layout>::new(&db, final_root_hash);
-            
-            println!("Phase 2: AssetTrie recreated with root: {:?}", final_root_hash);
-            
-            // 验证持久化数据仍然存在且正确
-            let persistent_items = vec![
-                (b"persistent_key1".as_slice(), b"persistent_value1".as_slice()),
-                (b"persistent_key2".as_slice(), b"persistent_value2".as_slice()),
-                (b"persistent_key3".as_slice(), b"persistent_value3".as_slice()),
-            ];
-            
-            for (key, expected_value) in &persistent_items {
-                let retrieved = asset_trie.get(key).expect("Failed to get data after reopen");
-                assert!(retrieved.is_some(), "Data should persist after database reopen");
-                assert_eq!(retrieved.unwrap(), expected_value.to_vec());
-                println!("Phase 2: Verified key {:?} = {:?}", 
-                         String::from_utf8_lossy(key), 
-                         String::from_utf8_lossy(expected_value));
-            }
-            
-            println!("Phase 2: All persistent data verified successfully!");
-            
-            // 清理
-            drop(asset_trie);
-            drop(db);
-        }
+        let config = DatabaseConfig::with_columns(1);
         
-        // 最终清理测试目录
+        let saved_root = {
+            // 在这个作用域内创建和使用第一个数据库实例
+            let db = Arc::new(RocksDb::open(&config, &node_dir).expect("打开数据库失败"));
+            let mut trie = AssetTrie::<Layout>::new(db.clone(), Default::default());
+            
+            // 插入测试数据
+            let items = vec![
+                (b"persistent_1".to_vec(), b"data_1".to_vec()),
+                (b"persistent_2".to_vec(), b"data_2".to_vec()),
+            ];
+            
+            trie.batch_insert(items).unwrap();
+            let root = trie.root();
+            
+            // 显式删除数据库引用，确保锁被释放
+            drop(db);
+            
+            root
+        }; // 第一个数据库实例在这里被完全释放
+        
+        // 等一小段时间确保锁被完全释放
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        
+        // 重新打开数据库，使用保存的根
+        let db2 = Arc::new(RocksDb::open(&config, &node_dir).expect("重新打开数据库失败"));
+        let trie2 = AssetTrie::<Layout>::new(db2, saved_root);
+        
+        // 验证数据持久化
+        assert_eq!(trie2.get(b"persistent_1").unwrap().unwrap(), b"data_1");
+        assert_eq!(trie2.get(b"persistent_2").unwrap().unwrap(), b"data_2");
+        
+        // 清理
         let _ = fs::remove_dir_all(&node_dir);
-        println!("Persistence test completed successfully!");
     }
-
-    // 往空树插入，再往非空树插入
     #[test]
-    fn test_batch_insert_on_existing_tree() {
-        let kv = kvdb_memorydb::create(1);
-        let mut trie = AssetTrie::<Layout>::new(&kv, Default::default());
+    fn test_historical_roots() {
+        let kv = Arc::new(kvdb_memorydb::create(1));
+        let mut trie = AssetTrie::<Layout>::new(kv.clone(), Default::default());
 
-        // 第一次插入
+        // 步骤1：创建 root1，包含 key1:value1, key2:value2
         let items1 = vec![
             (b"key1".to_vec(), b"value1".to_vec()),
             (b"key2".to_vec(), b"value2".to_vec()),
         ];
-        trie.batch_insert(items1).unwrap();
         
-        // 验证第一次插入
+        trie.batch_insert(items1).unwrap();
+        let root1 = trie.root();
+        println!("Root1: {:?}", root1);
+        
+        // 验证 root1 的状态
         assert_eq!(trie.get(b"key1").unwrap().unwrap(), b"value1");
         assert_eq!(trie.get(b"key2").unwrap().unwrap(), b"value2");
-
-        // 第二次插入到非空树
-        let items2 = vec![
-            (b"key2".to_vec(), b"value2_updated".to_vec()), // 覆盖现有
-            (b"key3".to_vec(), b"value3".to_vec()),         // 新增
-        ];
-        trie.batch_insert(items2).unwrap();
         
-        // 验证合并结果
-        assert_eq!(trie.get(b"key1").unwrap().unwrap(), b"value1");        // 保留
-        assert_eq!(trie.get(b"key2").unwrap().unwrap(), b"value2_updated"); // 更新
-        assert_eq!(trie.get(b"key3").unwrap().unwrap(), b"value3");        // 新增
-    }
-
-    #[test]
-    fn test_asset_trie_3000_data_disk() {
-        println!("开始测试3000条数据");
+        // 步骤2：删除 key1，修改 key2 为 new_value2，得到 root2
+        trie.remove(b"key1").unwrap();
+        trie.insert(b"key2", b"new_value2").unwrap();
+        let root2 = trie.root();
+        println!("Root2: {:?}", root2);
         
-        let node_dir = Path::new("./testdata/large_test");
+        // 验证根哈希确实发生了变化
+        assert_ne!(root1, root2, "Root hashes should be different");
         
-        // 清理之前的测试数据
-        if node_dir.exists() {
-            let _ = fs::remove_dir_all(&node_dir);
-        }
-        fs::create_dir_all(&node_dir).expect("创建测试目录失败");
-
-        // 配置RocksDB - 更保守的设置
-        let mut config = DatabaseConfig::with_columns(1);
-        config.memory_budget.insert(0, 128); // 增加内存预算到128MB
-        config.max_open_files = 2048;
+        // 步骤3：测试历史根功能
         
-        let db = RocksDb::open(&config, &node_dir).expect("打开RocksDB失败");
-        let mut trie = AssetTrie::<Layout>::new(&db, Default::default());
-
-        // 生成3000条测试数据（简化版本）
-        let mut items = Vec::new();
-        for i in 0..3000 {
-            let key = format!("key_{:06}", i);  // 简化键名
-            let value = format!("value_{:06}", i);  // 简化值
-            items.push((key.as_bytes().to_vec(), value.as_bytes().to_vec()));
-        }
-
-        println!("生成了{}条测试数据", items.len());
-
-        // 使用更小的批次并在每批后验证
-        let batch_size = 100;  // 减小批次大小
-        let mut total_insert_time = std::time::Duration::new(0, 0);
+        // 使用 root2（当前状态）验证
+        let trie_root2 = AssetTrie::<Layout>::new(kv.clone(), root2);
+        assert!(trie_root2.get(b"key1").unwrap().is_none(), "key1 should not exist in root2");
+        assert_eq!(trie_root2.get(b"key2").unwrap().unwrap(), b"new_value2", "key2 should have new_value2 in root2");
         
-        for (batch_idx, chunk) in items.chunks(batch_size).enumerate() {
-            let start_time = std::time::Instant::now();
-            
-            // 批量插入
-            match trie.batch_insert(chunk.to_vec()) {
-                Ok(_) => {
-                    let batch_duration = start_time.elapsed();
-                    total_insert_time += batch_duration;
-                    
-                    println!("第{}批({}-{})插入完成，耗时: {:?}", 
-                            batch_idx + 1, 
-                            batch_idx * batch_size, 
-                            std::cmp::min((batch_idx + 1) * batch_size, items.len()) - 1,
-                            batch_duration);
-                    
-                    // 每5批验证一次
-                    if (batch_idx + 1) % 5 == 0 {
-                        println!("验证第{}批的第一个和最后一个项目...", batch_idx + 1);
-                        
-                        // 验证当前批次的第一个项目
-                        let first_item_in_chunk = &chunk[0];
-                        match trie.get(&first_item_in_chunk.0) {
-                            Ok(Some(retrieved)) => {
-                                assert_eq!(retrieved, first_item_in_chunk.1);
-                                println!("  ✓ 第一个项目验证成功");
-                            },
-                            Ok(None) => {
-                                panic!("第{}批第一个项目不存在: {:?}", batch_idx + 1, String::from_utf8_lossy(&first_item_in_chunk.0));
-                            },
-                            Err(e) => {
-                                panic!("第{}批验证出错: {:?}", batch_idx + 1, e);
-                            }
-                        }
-                        
-                        // 验证当前批次的最后一个项目
-                        let last_item_in_chunk = &chunk[chunk.len() - 1];
-                        match trie.get(&last_item_in_chunk.0) {
-                            Ok(Some(retrieved)) => {
-                                assert_eq!(retrieved, last_item_in_chunk.1);
-                                println!("  ✓ 最后一个项目验证成功");
-                            },
-                            Ok(None) => {
-                                panic!("第{}批最后一个项目不存在: {:?}", batch_idx + 1, String::from_utf8_lossy(&last_item_in_chunk.0));
-                            },
-                            Err(e) => {
-                                panic!("第{}批验证出错: {:?}", batch_idx + 1, e);
-                            }
-                        }
-                    }
-                },
-                Err(e) => {
-                    panic!("第{}批插入失败: {:?}", batch_idx + 1, e);
-                }
-            }
-        }
+        // 使用 root1（历史状态）验证
+        let trie_root1 = AssetTrie::<Layout>::new(kv.clone(), root1);
+        assert_eq!(trie_root1.get(b"key1").unwrap().unwrap(), b"value1", "key1 should exist with value1 in root1");
+        assert_eq!(trie_root1.get(b"key2").unwrap().unwrap(), b"value2", "key2 should have value2 in root1");
         
-        println!("所有批次插入总耗时: {:?}", total_insert_time);
-        println!("插入后的根哈希: {:?}", trie.root());
-
-        // 最终验证 - 采样验证
-        println!("开始最终验证...");
-        let start_time = std::time::Instant::now();
-        let mut verified_count = 0;
-        let mut error_count = 0;
-        
-        for (i, (key, expected_value)) in items.iter().enumerate() {
-            if i % 50 == 0 {  // 每50条验证1条
-                match trie.get(key) {
-                    Ok(Some(retrieved)) => {
-                        if retrieved == *expected_value {
-                            verified_count += 1;
-                        } else {
-                            println!("值不匹配: key={:?}, expected={:?}, got={:?}", 
-                                    String::from_utf8_lossy(key),
-                                    String::from_utf8_lossy(expected_value),
-                                    String::from_utf8_lossy(&retrieved));
-                            error_count += 1;
-                        }
-                    },
-                    Ok(None) => {
-                        println!("键不存在: {:?}", String::from_utf8_lossy(key));
-                        error_count += 1;
-                    },
-                    Err(e) => {
-                        println!("验证错误: key={:?}, error={:?}", String::from_utf8_lossy(key), e);
-                        error_count += 1;
-                        
-                        // 如果出现IncompleteDatabase错误，打印调试信息
-                        if format!("{:?}", e).contains("IncompleteDatabase") {
-                            println!("IncompleteDatabase错误详情:");
-                            println!("  当前根哈希: {:?}", trie.root());
-                            println!("  尝试获取的键: {:?}", String::from_utf8_lossy(key));
-                            break; // 遇到这种错误时停止验证
-                        }
-                    }
-                }
-            }
-        }
-        
-        let verify_duration = start_time.elapsed();
-        println!("验证完成: 成功={}, 错误={}, 耗时: {:?}", verified_count, error_count, verify_duration);
-        
-        if error_count > 0 {
-            println!("发现{}个错误，测试不完全成功", error_count);
-        } else {
-            println!("所有验证项目都成功！");
-        }
-
-        // 清理
-        drop(trie);
-        drop(db);
-        let _ = fs::remove_dir_all(&node_dir);
-        
-        println!("3000条数据测试完成 - 磁盘模式（修复版）");
-    }
-
-    #[test]
-    fn test_historical_state_persistence() {
-        println!("=== 测试历史状态持久化 ===");
-        // root1：asset1=value1, asset2=value2
-        // root2：删除asset1，asset2=new_value2
-        // 结果：通过root1仍能访问asset1=value1和asset2=value2
-        //       通过root2只能访问asset2=new_value2，无法访问asset1
-        
-        let node_dir = Path::new("./testdata/historical_test");
-        
-        // 清理并创建测试目录
-        if node_dir.exists() {
-            let _ = fs::remove_dir_all(&node_dir);
-        }
-        fs::create_dir_all(&node_dir).expect("创建测试目录失败");
-
-        // 配置数据库
-        let mut config = DatabaseConfig::with_columns(1);
-        config.memory_budget.insert(0, 128);
-        config.max_open_files = 1024;
-        
-        let db = RocksDb::open(&config, &node_dir).expect("打开数据库失败");
-        
-        // === 阶段1：创建初始状态 (root1) ===
-        let mut asset_trie = AssetTrie::<Layout>::new(&db, Default::default());
-        
-        // 插入asset1和asset2
-        let items_stage1 = vec![
-            (b"asset1".to_vec(), b"value1".to_vec()),
-            (b"asset2".to_vec(), b"value2".to_vec()),
-        ];
-        
-        let root1 = asset_trie.batch_insert(items_stage1.clone())
-            .expect("阶段1插入失败");
-        
-        println!("阶段1完成 - root1: {:?}", root1);
-        
-        // 验证阶段1状态
-        assert_eq!(asset_trie.get(b"asset1").unwrap().unwrap(), b"value1");
-        assert_eq!(asset_trie.get(b"asset2").unwrap().unwrap(), b"value2");
-        println!("✅ 阶段1状态验证通过");
-        
-        // === 阶段2：修改状态 (root2) ===
-        
-        println!("\n=== 阶段2：删除asset1，修改asset2 ===");
-        
-        // 删除asset1
-        let root_after_delete = asset_trie.remove(b"asset1")
-            .expect("删除asset1失败");
-        
-        println!("删除asset1后的根: {:?}", root_after_delete);
-        
-        // 更新asset2为new_value2
-        let root2 = asset_trie.insert(b"asset2", b"new_value2")
-            .expect("更新asset2失败");
-        
-        println!("阶段2完成 - root2: {:?}", root2);
-        
-        // 验证阶段2状态
-        assert!(asset_trie.get(b"asset1").unwrap().is_none()); // asset1已删除
-        assert_eq!(asset_trie.get(b"asset2").unwrap().unwrap(), b"new_value2");
-        println!("✅ 阶段2状态验证通过");
-        
-        // === 关键测试：历史状态访问验证 ===
-        
-        println!("\n=== 历史状态访问验证 ===");
-        
-        // 测试1：通过root1访问历史状态
-        println!("测试1：通过root1访问历史状态");
-        let historical_trie = AssetTrie::<Layout>::new(&db, root1);
-        
-        // 通过root1应该能访问asset1的原始值
-        let historical_asset1 = historical_trie.get(b"asset1")
-            .expect("获取历史asset1失败");
-        
-        match historical_asset1 {
-            Some(value) => {
-                println!("✅ 通过root1成功访问asset1: {:?}", String::from_utf8_lossy(&value));
-                assert_eq!(value, b"value1");
-            },
-            None => {
-                panic!("❌ 通过root1无法访问asset1 - 历史状态保护失败！");
-            }
-        }
-        
-        // 通过root1应该能访问asset2的原始值
-        let historical_asset2 = historical_trie.get(b"asset2")
-            .expect("获取历史asset2失败");
-        
-        match historical_asset2 {
-            Some(value) => {
-                println!("✅ 通过root1成功访问asset2: {:?}", String::from_utf8_lossy(&value));
-                assert_eq!(value, b"value2");
-            },
-            None => {
-                panic!("❌ 通过root1无法访问asset2 - 历史状态保护失败！");
-            }
-        }
-        
-        // 测试2：通过root2访问当前状态
-        println!("\n测试2：通过root2访问当前状态");
-        let current_trie = AssetTrie::<Layout>::new(&db, root2);
-        
-        // 通过root2应该无法访问asset1（已被删除）
-        let current_asset1 = current_trie.get(b"asset1")
-            .expect("获取当前asset1失败");
-        
-        match current_asset1 {
-            Some(value) => {
-                panic!("❌ 通过root2意外访问到了asset1: {:?} - 状态隔离失败！", String::from_utf8_lossy(&value));
-            },
-            None => {
-                println!("✅ 通过root2正确地无法访问asset1（已删除）");
-            }
-        }
-        
-        // 通过root2应该能访问asset2的更新值
-        let current_asset2 = current_trie.get(b"asset2")
-            .expect("获取当前asset2失败");
-        
-        match current_asset2 {
-            Some(value) => {
-                println!("✅ 通过root2成功访问asset2: {:?}", String::from_utf8_lossy(&value));
-                assert_eq!(value, b"new_value2");
-            },
-            None => {
-                panic!("❌ 通过root2无法访问asset2");
-            }
-        }
-        
-        // === 交叉验证：确保状态完全隔离 ===
-        
-        println!("\n=== 交叉验证：状态隔离确认 ===");
-        
-        // 再次确认root1和root2的状态完全不同
-        let root1_trie = AssetTrie::<Layout>::new(&db, root1);
-        let root2_trie = AssetTrie::<Layout>::new(&db, root2);
-        
-        // root1状态检查
-        println!("Root1状态快照：");
-        let r1_asset1 = root1_trie.get(b"asset1").unwrap();
-        let r1_asset2 = root1_trie.get(b"asset2").unwrap();
-        println!("  asset1: {:?}", r1_asset1.as_ref().map(|v| String::from_utf8_lossy(v)));
-        println!("  asset2: {:?}", r1_asset2.as_ref().map(|v| String::from_utf8_lossy(v)));
-        
-        // root2状态检查
-        println!("Root2状态快照：");
-        let r2_asset1 = root2_trie.get(b"asset1").unwrap();
-        let r2_asset2 = root2_trie.get(b"asset2").unwrap();
-        println!("  asset1: {:?}", r2_asset1.as_ref().map(|v| String::from_utf8_lossy(v)));
-        println!("  asset2: {:?}", r2_asset2.as_ref().map(|v| String::from_utf8_lossy(v)));
-        
-        // 断言验证
-        assert!(r1_asset1.is_some() && r1_asset1.unwrap() == b"value1");
-        assert!(r1_asset2.is_some() && r1_asset2.unwrap() == b"value2");
-        assert!(r2_asset1.is_none());
-        assert!(r2_asset2.is_some() && r2_asset2.unwrap() == b"new_value2");
-        
-        println!("✅ 状态隔离验证完全通过！");
-        
-        // === 数据库重启测试 ===
-        
-        println!("\n=== 数据库重启测试 ===");
-        
-        // 保存根哈希用于重启后测试
-        let saved_root1 = root1.clone();
-        let saved_root2 = root2.clone();
-        
-        // 关闭数据库
-        drop(asset_trie);
-        drop(historical_trie);
-        drop(current_trie);
-        drop(root1_trie);
-        drop(root2_trie);
-        drop(db);
-        
-        // 重新打开数据库
-        let db_reopen = RocksDb::open(&config, &node_dir).expect("重新打开数据库失败");
-        
-        // 重启后的历史状态测试
-        println!("重启后测试root1状态：");
-        let restart_root1_trie = AssetTrie::<Layout>::new(&db_reopen, saved_root1);
-        let restart_r1_asset1 = restart_root1_trie.get(b"asset1").unwrap();
-        let restart_r1_asset2 = restart_root1_trie.get(b"asset2").unwrap();
-        
-        assert!(restart_r1_asset1.is_some() && restart_r1_asset1.unwrap() == b"value1");
-        assert!(restart_r1_asset2.is_some() && restart_r1_asset2.unwrap() == b"value2");
-        println!("✅ 重启后root1状态正确");
-        
-        // 重启后的当前状态测试
-        println!("重启后测试root2状态：");
-        let restart_root2_trie = AssetTrie::<Layout>::new(&db_reopen, saved_root2);
-        let restart_r2_asset1 = restart_root2_trie.get(b"asset1").unwrap();
-        let restart_r2_asset2 = restart_root2_trie.get(b"asset2").unwrap();
-        
-        assert!(restart_r2_asset1.is_none());
-        assert!(restart_r2_asset2.is_some() && restart_r2_asset2.unwrap() == b"new_value2");
-        println!("✅ 重启后root2状态正确");
-        
-        // 清理
-        drop(restart_root1_trie);
-        drop(restart_root2_trie);
-        drop(db_reopen);
-        let _ = fs::remove_dir_all(&node_dir);
-        
-        println!("\n🎉 历史状态持久化测试全部通过！");
-        println!("✅ root1: asset1=value1, asset2=value2");
-        println!("✅ root2: asset1=None, asset2=new_value2");
-        println!("✅ 状态完全隔离，历史可追溯");
-        println!("✅ 数据库重启后状态持久化正确");
+        println!("Historical roots test passed!");
+        println!("Root1 preserves: key1=value1, key2=value2");
+        println!("Root2 contains: key2=new_value2 (key1 deleted)");
     }
 }

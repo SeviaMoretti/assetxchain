@@ -7,7 +7,6 @@ mod cli;
 mod command;
 mod rpc;
 mod service;
-mod trie_db_mpt;
 mod kvdb_hashdb;
 mod dataasset;
 mod mpt;

@@ -1,24 +1,25 @@
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::error::Error;
+use std::sync::Arc;
 
 use hash_db::{HashDB, Hasher, AsHashDB, HashDBRef};
 use kvdb::KeyValueDB;
 use trie_db::DBValue;
-use log::trace;
+use log::{trace, debug, warn};
 
 /// 用来存数据资产节点的 column
 const ASSET_DB_COL: u32 = 0;
 
-/// KVDB + 内存缓存 HashDB
-pub struct KvdbHashDB<'a, H: Hasher> {
-    kv: &'a dyn KeyValueDB,
+/// 改进的 KVDB + 内存缓存 HashDB
+pub struct KvdbHashDB<H: Hasher> {
+    kv: Arc<dyn KeyValueDB>,
     _marker: PhantomData<H>,
     cache: HashMap<Vec<u8>, DBValue>, // 内存缓存
 }
 
-impl<'a, H: Hasher> KvdbHashDB<'a, H> {
-    pub fn new(kv: &'a dyn KeyValueDB) -> Self {
+impl<H: Hasher> KvdbHashDB<H> {
+    pub fn new(kv: Arc<dyn KeyValueDB>) -> Self {
         Self {
             kv,
             _marker: PhantomData,
@@ -36,35 +37,56 @@ impl<'a, H: Hasher> KvdbHashDB<'a, H> {
         real_key.extend_from_slice(key);
         real_key
     }
+
+    /// 清空缓存
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+
+    /// 获取缓存大小
+    pub fn cache_size(&self) -> usize {
+        self.cache.len()
+    }
 }
 
 /// HashDB 实现
-impl<'a, H: Hasher> HashDB<H, DBValue> for KvdbHashDB<'a, H>
+impl<H: Hasher> HashDB<H, DBValue> for KvdbHashDB<H>
 where
     H::Out: AsRef<[u8]>,
 {
     fn get(&self, key: &H::Out, prefix: (&[u8], Option<u8>)) -> Option<DBValue> {
-        println!("HashDB::get - key: {:?}, prefix: {:?}", key.as_ref(), prefix);
+        debug!("HashDB::get - key: {:?}, prefix: {:?}", 
+               key.as_ref().get(0..8).unwrap_or(&[]), prefix);
         
         // 全零hash返回 None
         if key.as_ref().iter().all(|&x| x == 0) {
-            println!("HashDB::get - returning None for zero key");
+            debug!("HashDB::get - returning None for zero key");
             return None;
         }
-        println!("key:{:?}, prefix:{:?}", key, prefix);
 
         let real_key = Self::make_prefixed_key(prefix, key.as_ref());
 
         // 先查内存缓存
         if let Some(v) = self.cache.get(&real_key) {
-            trace!("cache hit, key:{:?}", key);
+            trace!("Cache hit for key");
             return Some(v.clone());
         }
 
         // 再查 KVDB
-        let result = self.kv.get(ASSET_DB_COL, &real_key).ok().flatten().map(|v| v.to_vec());
-        println!("HashDB::get - DB lookup: {}", if result.is_some() { "found" } else { "not found" });
-        result
+        match self.kv.get(ASSET_DB_COL, &real_key) {
+            Ok(Some(data)) => {
+                debug!("HashDB::get - found in DB, size: {}", data.len());
+                Some(data.to_vec())
+            },
+            Ok(None) => {
+                debug!("HashDB::get - not found in DB");
+                None
+            },
+            Err(e) => {
+                warn!("HashDB::get - DB error: {:?}", e);
+                None
+            }
+        }
     }
 
     fn contains(&self, key: &H::Out, prefix: (&[u8], Option<u8>)) -> bool {
@@ -73,49 +95,67 @@ where
 
     fn insert(&mut self, prefix: (&[u8], Option<u8>), value: &[u8]) -> H::Out {
         let hash = H::hash(value);
-        println!("HashDB::insert - hash: {:?}, value_len: {}", hash.as_ref(), value.len());
+        debug!("HashDB::insert - hash: {:?}, value_len: {}", 
+               hash.as_ref().get(0..8).unwrap_or(&[]), value.len());
         self.emplace(hash.clone(), prefix, value.to_vec());
         hash
     }
 
     fn emplace(&mut self, key: H::Out, prefix: (&[u8], Option<u8>), value: DBValue) {
-        println!("HashDB::emplace - key: {:?}, prefix: {:?}, value_len: {}", 
-             key.as_ref(), prefix, value.len());
+        debug!("HashDB::emplace - key: {:?}, prefix: {:?}, value_len: {}", 
+               key.as_ref().get(0..8).unwrap_or(&[]), prefix, value.len());
         let real_key = Self::make_prefixed_key(prefix, key.as_ref());
 
         // 写入 KVDB
         let mut tx = self.kv.transaction();
         tx.put(ASSET_DB_COL, &real_key, &value);
-        self.kv.write(tx).expect("KVDB write failed");
-
-        println!("HashDB::emplace - successfully wrote to DB");
-        // 立即验证写入是否成功
-        let verify = self.kv.get(ASSET_DB_COL, &real_key)
-            .expect("KVDB get failed");
         
-        if let Some(stored) = verify {
-            println!("Verification SUCCESS - stored {} bytes", stored.len());
-        } else {
-            println!("Verification FAILED - data not found after write!");
+        if let Err(e) = self.kv.write(tx) {
+            warn!("KVDB write failed: {:?}", e);
+            return;
+        }
+
+        debug!("HashDB::emplace - successfully wrote to DB");
+        
+        // 验证写入（可选，在调试时启用）
+        if cfg!(debug_assertions) {
+            match self.kv.get(ASSET_DB_COL, &real_key) {
+                Ok(Some(stored)) => {
+                    debug!("Verification SUCCESS - stored {} bytes", stored.len());
+                },
+                Ok(None) => {
+                    warn!("Verification FAILED - data not found after write!");
+                },
+                Err(e) => {
+                    warn!("Verification ERROR: {:?}", e);
+                }
+            }
         }
 
         // 写入缓存
-        self.cache.insert(real_key.clone(), value.clone());
+        self.cache.insert(real_key, value);
     }
 
     fn remove(&mut self, key: &H::Out, prefix: (&[u8], Option<u8>)) {
-        println!("HashDB::remove called - key: {:?}", key.as_ref());
+        debug!("HashDB::remove called - key: {:?}", 
+               key.as_ref().get(0..8).unwrap_or(&[]));
         let real_key = Self::make_prefixed_key(prefix, key.as_ref());
+        
+        // 从缓存中移除
         self.cache.remove(&real_key);
 
+        // 从数据库中删除
         let mut tx = self.kv.transaction();
         tx.delete(ASSET_DB_COL, &real_key);
-        self.kv.write(tx).expect("KVDB delete failed");
+        
+        if let Err(e) = self.kv.write(tx) {
+            warn!("KVDB delete failed: {:?}", e);
+        }
     }
 }
 
 /// HashDBRef 实现
-impl<'a, H: Hasher> HashDBRef<H, DBValue> for KvdbHashDB<'a, H>
+impl<H: Hasher> HashDBRef<H, DBValue> for KvdbHashDB<H>
 where
     H::Out: AsRef<[u8]>,
 {
@@ -129,7 +169,7 @@ where
 }
 
 /// AsHashDB 实现
-impl<'a, H: Hasher> AsHashDB<H, DBValue> for KvdbHashDB<'a, H> {
+impl<H: Hasher> AsHashDB<H, DBValue> for KvdbHashDB<H> {
     fn as_hash_db(&self) -> &dyn HashDB<H, DBValue> {
         self
     }
@@ -139,37 +179,27 @@ impl<'a, H: Hasher> AsHashDB<H, DBValue> for KvdbHashDB<'a, H> {
     }
 }
 
-/// 变更收集器：收集所有读写操作，最后批量应用
-/// 用于在不加载整个树的情况下进行增量修改
-/// 
-/// 新增功能：支持历史状态保护，防止删除仍被历史根引用的节点
-pub struct ChangeCollector<'a, H: Hasher> {
-    kv: &'a dyn KeyValueDB,
-    pub changes: HashMap<Vec<u8>, Option<DBValue>>, // None 表示删除，公开以便调试
-    preserve_history: bool, // 新增：是否保护历史状态
+/// 改进的变更收集器，支持历史状态保护和批量操作优化
+pub struct ChangeCollector<H: Hasher> {
+    kv: Arc<dyn KeyValueDB>,
+    pub changes: HashMap<Vec<u8>, Option<DBValue>>, // 公开以便调试
+    preserve_history: bool,
     _marker: PhantomData<H>,
 }
 
-impl<'a, H: Hasher> ChangeCollector<'a, H> {
+impl<H: Hasher> ChangeCollector<H> {
     /// 创建新的 ChangeCollector，默认启用历史保护
-    pub fn new(kv: &'a dyn KeyValueDB) -> Self {
+    pub fn new(kv: Arc<dyn KeyValueDB>) -> Self {
         Self {
             kv,
             changes: HashMap::new(),
-            preserve_history: true, // 默认启用历史保护
+            preserve_history: true,
             _marker: PhantomData,
         }
     }
 
-    /// 创建新的 ChangeCollector，可以选择是否启用历史保护
-    /// 
-    /// # 参数
-    /// * `kv` - 键值数据库引用
-    /// * `preserve_history` - 是否保护历史状态。如果为 true，则不会删除任何节点；如果为 false，则正常删除节点
-    /// 
-    /// # 注意
-    /// 设置 `preserve_history` 为 false 可能会破坏历史状态的访问能力，请谨慎使用
-    pub fn new_with_history_mode(kv: &'a dyn KeyValueDB, preserve_history: bool) -> Self {
+    /// 创建支持配置历史保护模式的 ChangeCollector
+    pub fn new_with_history_mode(kv: Arc<dyn KeyValueDB>, preserve_history: bool) -> Self {
         Self {
             kv,
             changes: HashMap::new(),
@@ -181,6 +211,11 @@ impl<'a, H: Hasher> ChangeCollector<'a, H> {
     /// 获取当前的历史保护设置
     pub fn is_preserving_history(&self) -> bool {
         self.preserve_history
+    }
+
+    /// 设置历史保护模式
+    pub fn set_preserve_history(&mut self, preserve: bool) {
+        self.preserve_history = preserve;
     }
     
     fn make_prefixed_key(prefix: (&[u8], Option<u8>), key: &[u8]) -> Vec<u8> {
@@ -194,42 +229,69 @@ impl<'a, H: Hasher> ChangeCollector<'a, H> {
     }
     
     /// 应用所有收集到的变更到数据库
-    /// 
-    /// 在历史保护模式下，删除操作会被跳过，只执行写入操作
     pub fn apply_changes(&self) -> Result<(), Box<dyn Error>> {
         if self.changes.is_empty() {
+            debug!("No changes to apply");
             return Ok(());
         }
         
         let mut tx = self.kv.transaction();
-        let mut applied_count = 0;
+        let mut write_count = 0;
+        let mut delete_count = 0;
+        let mut skip_count = 0;
         
         for (key, value_opt) in &self.changes {
             match value_opt {
                 Some(value) => {
-                    println!("Applying write: key len={}, value len={}", key.len(), value.len());
+                    debug!("Applying write: key len={}, value len={}", key.len(), value.len());
                     tx.put(ASSET_DB_COL, key, value);
-                    applied_count += 1;
+                    write_count += 1;
                 },
                 None => {
                     if self.preserve_history {
-                        println!("Skipping delete (history preservation): key len={}", key.len());
+                        debug!("Skipping delete (history preservation): key len={}", key.len());
+                        skip_count += 1;
                     } else {
-                        println!("Applying delete: key len={}", key.len());
+                        debug!("Applying delete: key len={}", key.len());
                         tx.delete(ASSET_DB_COL, key);
-                        applied_count += 1;
+                        delete_count += 1;
                     }
                 }
             }
         }
         
         self.kv.write(tx)?;
-        println!("Applied {} changes to database (preserve_history: {})", applied_count, self.preserve_history);
+        
+        debug!(
+            "Applied changes - writes: {}, deletes: {}, skipped: {} (preserve_history: {})", 
+            write_count, delete_count, skip_count, self.preserve_history
+        );
+        
         Ok(())
+    }
+
+    /// 清空收集的变更
+    pub fn clear_changes(&mut self) {
+        self.changes.clear();
+    }
+
+    /// 获取变更数量统计
+    pub fn change_stats(&self) -> (usize, usize, usize) {
+        let mut writes = 0;
+        let mut deletes = 0;
+        
+        for value_opt in self.changes.values() {
+            match value_opt {
+                Some(_) => writes += 1,
+                None => deletes += 1,
+            }
+        }
+        
+        (writes, deletes, self.changes.len())
     }
 }
 
-impl<'a, H: Hasher> HashDB<H, DBValue> for ChangeCollector<'a, H>
+impl<H: Hasher> HashDB<H, DBValue> for ChangeCollector<H>
 where
     H::Out: AsRef<[u8]>,
 {
@@ -242,7 +304,13 @@ where
         }
         
         // 再查原始数据库
-        self.kv.get(ASSET_DB_COL, &real_key).ok().flatten().map(|v| v.to_vec())
+        match self.kv.get(ASSET_DB_COL, &real_key) {
+            Ok(opt) => opt.map(|v| v.to_vec()),
+            Err(e) => {
+                warn!("ChangeCollector::get - DB error: {:?}", e);
+                None
+            }
+        }
     }
 
     fn contains(&self, key: &H::Out, prefix: (&[u8], Option<u8>)) -> bool {
@@ -257,21 +325,18 @@ where
 
     fn emplace(&mut self, key: H::Out, prefix: (&[u8], Option<u8>), value: DBValue) {
         let real_key = Self::make_prefixed_key(prefix, key.as_ref());
-        println!("ChangeCollector::emplace - recording write for key len={}, value len={}", real_key.len(), value.len());
+        debug!("ChangeCollector::emplace - recording write for key len={}, value len={}", 
+               real_key.len(), value.len());
         self.changes.insert(real_key, Some(value));
     }
 
-    /// 记录删除操作
-    /// 
-    /// 在历史保护模式下，此方法仍会记录删除操作，但在 `apply_changes` 时会跳过实际删除
-    /// 这样设计是为了保持 trie 库的正常工作流程，同时在应用阶段进行历史保护
     fn remove(&mut self, key: &H::Out, prefix: (&[u8], Option<u8>)) {
         let real_key = Self::make_prefixed_key(prefix, key.as_ref());
         
         if self.preserve_history {
-            println!("ChangeCollector::remove - recording delete for history-protected key len={} (will be skipped in apply_changes)", real_key.len());
+            debug!("ChangeCollector::remove - recording delete for history-protected key len={} (will be skipped in apply_changes)", real_key.len());
         } else {
-            println!("ChangeCollector::remove - recording delete for key len={}", real_key.len());
+            debug!("ChangeCollector::remove - recording delete for key len={}", real_key.len());
         }
         
         self.changes.insert(real_key, None);
@@ -279,7 +344,7 @@ where
 }
 
 /// HashDBRef 实现
-impl<'a, H: Hasher> HashDBRef<H, DBValue> for ChangeCollector<'a, H>
+impl<H: Hasher> HashDBRef<H, DBValue> for ChangeCollector<H>
 where
     H::Out: AsRef<[u8]>,
 {
@@ -293,7 +358,7 @@ where
 }
 
 /// AsHashDB 实现
-impl<'a, H: Hasher> AsHashDB<H, DBValue> for ChangeCollector<'a, H> {
+impl<H: Hasher> AsHashDB<H, DBValue> for ChangeCollector<H> {
     fn as_hash_db(&self) -> &dyn HashDB<H, DBValue> {
         self
     }

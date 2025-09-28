@@ -1,6 +1,6 @@
-// 资产元数据数据结构
 use sp_core::H256;
 
+// 数据元证
 pub struct Dataasset {
     id: u64,
     name: String,
@@ -9,6 +9,8 @@ pub struct Dataasset {
     cid: String,
     nounce: u64,   
 }
+
+// 数据权证
 
 /*
 type DataAsset struct {
@@ -60,3 +62,27 @@ type RightToken struct {
 	// InterestLimit []type // 权限范围
 }
 */ 
+
+// 元证
+// 注册
+
+// 交易（更新）
+
+// 查找
+
+// 删除（注销）
+
+// 锁定
+
+// 合并
+
+// 分解
+
+// 权证，权证树的存储在kv数据库中使用prefix和cloum区分
+// 注册
+
+// 交易（更新）
+
+// 查找
+
+// 删除

@@ -10,7 +10,7 @@ mod service;
 mod trie_db_mpt;
 mod kvdb_hashdb;
 mod dataasset;
-mod asset_trie;
+mod mpt;
 
 fn main() -> sc_cli::Result<()> {
 	command::run()

@@ -667,4 +667,216 @@ mod tests {
         
         println!("3000条数据测试完成 - 磁盘模式（修复版）");
     }
+
+    #[test]
+    fn test_historical_state_persistence() {
+        println!("=== 测试历史状态持久化 ===");
+        // root1：asset1=value1, asset2=value2
+        // root2：删除asset1，asset2=new_value2
+        // 结果：通过root1仍能访问asset1=value1和asset2=value2
+        //       通过root2只能访问asset2=new_value2，无法访问asset1
+        
+        let node_dir = Path::new("./testdata/historical_test");
+        
+        // 清理并创建测试目录
+        if node_dir.exists() {
+            let _ = fs::remove_dir_all(&node_dir);
+        }
+        fs::create_dir_all(&node_dir).expect("创建测试目录失败");
+
+        // 配置数据库
+        let mut config = DatabaseConfig::with_columns(1);
+        config.memory_budget.insert(0, 128);
+        config.max_open_files = 1024;
+        
+        let db = RocksDb::open(&config, &node_dir).expect("打开数据库失败");
+        
+        // === 阶段1：创建初始状态 (root1) ===
+        let mut asset_trie = AssetTrie::<Layout>::new(&db, Default::default());
+        
+        // 插入asset1和asset2
+        let items_stage1 = vec![
+            (b"asset1".to_vec(), b"value1".to_vec()),
+            (b"asset2".to_vec(), b"value2".to_vec()),
+        ];
+        
+        let root1 = asset_trie.batch_insert(items_stage1.clone())
+            .expect("阶段1插入失败");
+        
+        println!("阶段1完成 - root1: {:?}", root1);
+        
+        // 验证阶段1状态
+        assert_eq!(asset_trie.get(b"asset1").unwrap().unwrap(), b"value1");
+        assert_eq!(asset_trie.get(b"asset2").unwrap().unwrap(), b"value2");
+        println!("✅ 阶段1状态验证通过");
+        
+        // === 阶段2：修改状态 (root2) ===
+        
+        println!("\n=== 阶段2：删除asset1，修改asset2 ===");
+        
+        // 删除asset1
+        let root_after_delete = asset_trie.remove(b"asset1")
+            .expect("删除asset1失败");
+        
+        println!("删除asset1后的根: {:?}", root_after_delete);
+        
+        // 更新asset2为new_value2
+        let root2 = asset_trie.insert(b"asset2", b"new_value2")
+            .expect("更新asset2失败");
+        
+        println!("阶段2完成 - root2: {:?}", root2);
+        
+        // 验证阶段2状态
+        assert!(asset_trie.get(b"asset1").unwrap().is_none()); // asset1已删除
+        assert_eq!(asset_trie.get(b"asset2").unwrap().unwrap(), b"new_value2");
+        println!("✅ 阶段2状态验证通过");
+        
+        // === 关键测试：历史状态访问验证 ===
+        
+        println!("\n=== 历史状态访问验证 ===");
+        
+        // 测试1：通过root1访问历史状态
+        println!("测试1：通过root1访问历史状态");
+        let historical_trie = AssetTrie::<Layout>::new(&db, root1);
+        
+        // 通过root1应该能访问asset1的原始值
+        let historical_asset1 = historical_trie.get(b"asset1")
+            .expect("获取历史asset1失败");
+        
+        match historical_asset1 {
+            Some(value) => {
+                println!("✅ 通过root1成功访问asset1: {:?}", String::from_utf8_lossy(&value));
+                assert_eq!(value, b"value1");
+            },
+            None => {
+                panic!("❌ 通过root1无法访问asset1 - 历史状态保护失败！");
+            }
+        }
+        
+        // 通过root1应该能访问asset2的原始值
+        let historical_asset2 = historical_trie.get(b"asset2")
+            .expect("获取历史asset2失败");
+        
+        match historical_asset2 {
+            Some(value) => {
+                println!("✅ 通过root1成功访问asset2: {:?}", String::from_utf8_lossy(&value));
+                assert_eq!(value, b"value2");
+            },
+            None => {
+                panic!("❌ 通过root1无法访问asset2 - 历史状态保护失败！");
+            }
+        }
+        
+        // 测试2：通过root2访问当前状态
+        println!("\n测试2：通过root2访问当前状态");
+        let current_trie = AssetTrie::<Layout>::new(&db, root2);
+        
+        // 通过root2应该无法访问asset1（已被删除）
+        let current_asset1 = current_trie.get(b"asset1")
+            .expect("获取当前asset1失败");
+        
+        match current_asset1 {
+            Some(value) => {
+                panic!("❌ 通过root2意外访问到了asset1: {:?} - 状态隔离失败！", String::from_utf8_lossy(&value));
+            },
+            None => {
+                println!("✅ 通过root2正确地无法访问asset1（已删除）");
+            }
+        }
+        
+        // 通过root2应该能访问asset2的更新值
+        let current_asset2 = current_trie.get(b"asset2")
+            .expect("获取当前asset2失败");
+        
+        match current_asset2 {
+            Some(value) => {
+                println!("✅ 通过root2成功访问asset2: {:?}", String::from_utf8_lossy(&value));
+                assert_eq!(value, b"new_value2");
+            },
+            None => {
+                panic!("❌ 通过root2无法访问asset2");
+            }
+        }
+        
+        // === 交叉验证：确保状态完全隔离 ===
+        
+        println!("\n=== 交叉验证：状态隔离确认 ===");
+        
+        // 再次确认root1和root2的状态完全不同
+        let root1_trie = AssetTrie::<Layout>::new(&db, root1);
+        let root2_trie = AssetTrie::<Layout>::new(&db, root2);
+        
+        // root1状态检查
+        println!("Root1状态快照：");
+        let r1_asset1 = root1_trie.get(b"asset1").unwrap();
+        let r1_asset2 = root1_trie.get(b"asset2").unwrap();
+        println!("  asset1: {:?}", r1_asset1.as_ref().map(|v| String::from_utf8_lossy(v)));
+        println!("  asset2: {:?}", r1_asset2.as_ref().map(|v| String::from_utf8_lossy(v)));
+        
+        // root2状态检查
+        println!("Root2状态快照：");
+        let r2_asset1 = root2_trie.get(b"asset1").unwrap();
+        let r2_asset2 = root2_trie.get(b"asset2").unwrap();
+        println!("  asset1: {:?}", r2_asset1.as_ref().map(|v| String::from_utf8_lossy(v)));
+        println!("  asset2: {:?}", r2_asset2.as_ref().map(|v| String::from_utf8_lossy(v)));
+        
+        // 断言验证
+        assert!(r1_asset1.is_some() && r1_asset1.unwrap() == b"value1");
+        assert!(r1_asset2.is_some() && r1_asset2.unwrap() == b"value2");
+        assert!(r2_asset1.is_none());
+        assert!(r2_asset2.is_some() && r2_asset2.unwrap() == b"new_value2");
+        
+        println!("✅ 状态隔离验证完全通过！");
+        
+        // === 数据库重启测试 ===
+        
+        println!("\n=== 数据库重启测试 ===");
+        
+        // 保存根哈希用于重启后测试
+        let saved_root1 = root1.clone();
+        let saved_root2 = root2.clone();
+        
+        // 关闭数据库
+        drop(asset_trie);
+        drop(historical_trie);
+        drop(current_trie);
+        drop(root1_trie);
+        drop(root2_trie);
+        drop(db);
+        
+        // 重新打开数据库
+        let db_reopen = RocksDb::open(&config, &node_dir).expect("重新打开数据库失败");
+        
+        // 重启后的历史状态测试
+        println!("重启后测试root1状态：");
+        let restart_root1_trie = AssetTrie::<Layout>::new(&db_reopen, saved_root1);
+        let restart_r1_asset1 = restart_root1_trie.get(b"asset1").unwrap();
+        let restart_r1_asset2 = restart_root1_trie.get(b"asset2").unwrap();
+        
+        assert!(restart_r1_asset1.is_some() && restart_r1_asset1.unwrap() == b"value1");
+        assert!(restart_r1_asset2.is_some() && restart_r1_asset2.unwrap() == b"value2");
+        println!("✅ 重启后root1状态正确");
+        
+        // 重启后的当前状态测试
+        println!("重启后测试root2状态：");
+        let restart_root2_trie = AssetTrie::<Layout>::new(&db_reopen, saved_root2);
+        let restart_r2_asset1 = restart_root2_trie.get(b"asset1").unwrap();
+        let restart_r2_asset2 = restart_root2_trie.get(b"asset2").unwrap();
+        
+        assert!(restart_r2_asset1.is_none());
+        assert!(restart_r2_asset2.is_some() && restart_r2_asset2.unwrap() == b"new_value2");
+        println!("✅ 重启后root2状态正确");
+        
+        // 清理
+        drop(restart_root1_trie);
+        drop(restart_root2_trie);
+        drop(db_reopen);
+        let _ = fs::remove_dir_all(&node_dir);
+        
+        println!("\n🎉 历史状态持久化测试全部通过！");
+        println!("✅ root1: asset1=value1, asset2=value2");
+        println!("✅ root2: asset1=None, asset2=new_value2");
+        println!("✅ 状态完全隔离，历史可追溯");
+        println!("✅ 数据库重启后状态持久化正确");
+    }
 }

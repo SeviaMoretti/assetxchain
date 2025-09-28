@@ -46,7 +46,7 @@ where
     fn get(&self, key: &H::Out, prefix: (&[u8], Option<u8>)) -> Option<DBValue> {
         println!("HashDB::get - key: {:?}, prefix: {:?}", key.as_ref(), prefix);
         
-        // 空树全零 hash 返回 None
+        // 全零hash返回 None
         if key.as_ref().iter().all(|&x| x == 0) {
             println!("HashDB::get - returning None for zero key");
             return None;
@@ -141,19 +141,46 @@ impl<'a, H: Hasher> AsHashDB<H, DBValue> for KvdbHashDB<'a, H> {
 
 /// 变更收集器：收集所有读写操作，最后批量应用
 /// 用于在不加载整个树的情况下进行增量修改
+/// 
+/// 新增功能：支持历史状态保护，防止删除仍被历史根引用的节点
 pub struct ChangeCollector<'a, H: Hasher> {
     kv: &'a dyn KeyValueDB,
     pub changes: HashMap<Vec<u8>, Option<DBValue>>, // None 表示删除，公开以便调试
+    preserve_history: bool, // 新增：是否保护历史状态
     _marker: PhantomData<H>,
 }
 
 impl<'a, H: Hasher> ChangeCollector<'a, H> {
+    /// 创建新的 ChangeCollector，默认启用历史保护
     pub fn new(kv: &'a dyn KeyValueDB) -> Self {
         Self {
             kv,
             changes: HashMap::new(),
+            preserve_history: true, // 默认启用历史保护
             _marker: PhantomData,
         }
+    }
+
+    /// 创建新的 ChangeCollector，可以选择是否启用历史保护
+    /// 
+    /// # 参数
+    /// * `kv` - 键值数据库引用
+    /// * `preserve_history` - 是否保护历史状态。如果为 true，则不会删除任何节点；如果为 false，则正常删除节点
+    /// 
+    /// # 注意
+    /// 设置 `preserve_history` 为 false 可能会破坏历史状态的访问能力，请谨慎使用
+    pub fn new_with_history_mode(kv: &'a dyn KeyValueDB, preserve_history: bool) -> Self {
+        Self {
+            kv,
+            changes: HashMap::new(),
+            preserve_history,
+            _marker: PhantomData,
+        }
+    }
+
+    /// 获取当前的历史保护设置
+    pub fn is_preserving_history(&self) -> bool {
+        self.preserve_history
     }
     
     fn make_prefixed_key(prefix: (&[u8], Option<u8>), key: &[u8]) -> Vec<u8> {
@@ -166,26 +193,38 @@ impl<'a, H: Hasher> ChangeCollector<'a, H> {
         real_key
     }
     
+    /// 应用所有收集到的变更到数据库
+    /// 
+    /// 在历史保护模式下，删除操作会被跳过，只执行写入操作
     pub fn apply_changes(&self) -> Result<(), Box<dyn Error>> {
         if self.changes.is_empty() {
             return Ok(());
         }
         
         let mut tx = self.kv.transaction();
+        let mut applied_count = 0;
+        
         for (key, value_opt) in &self.changes {
             match value_opt {
                 Some(value) => {
                     println!("Applying write: key len={}, value len={}", key.len(), value.len());
                     tx.put(ASSET_DB_COL, key, value);
+                    applied_count += 1;
                 },
                 None => {
-                    println!("Applying delete: key len={}", key.len());
-                    tx.delete(ASSET_DB_COL, key);
+                    if self.preserve_history {
+                        println!("Skipping delete (history preservation): key len={}", key.len());
+                    } else {
+                        println!("Applying delete: key len={}", key.len());
+                        tx.delete(ASSET_DB_COL, key);
+                        applied_count += 1;
+                    }
                 }
             }
         }
+        
         self.kv.write(tx)?;
-        println!("Applied {} changes to database", self.changes.len());
+        println!("Applied {} changes to database (preserve_history: {})", applied_count, self.preserve_history);
         Ok(())
     }
 }
@@ -222,9 +261,19 @@ where
         self.changes.insert(real_key, Some(value));
     }
 
+    /// 记录删除操作
+    /// 
+    /// 在历史保护模式下，此方法仍会记录删除操作，但在 `apply_changes` 时会跳过实际删除
+    /// 这样设计是为了保持 trie 库的正常工作流程，同时在应用阶段进行历史保护
     fn remove(&mut self, key: &H::Out, prefix: (&[u8], Option<u8>)) {
         let real_key = Self::make_prefixed_key(prefix, key.as_ref());
-        println!("ChangeCollector::remove - recording delete for key len={}", real_key.len());
+        
+        if self.preserve_history {
+            println!("ChangeCollector::remove - recording delete for history-protected key len={} (will be skipped in apply_changes)", real_key.len());
+        } else {
+            println!("ChangeCollector::remove - recording delete for key len={}", real_key.len());
+        }
+        
         self.changes.insert(real_key, None);
     }
 }

@@ -44,6 +44,8 @@ use super::{
 	RuntimeCall, RuntimeEvent, RuntimeFreezeReason, RuntimeHoldReason, RuntimeOrigin, RuntimeTask,
 	System, EXISTENTIAL_DEPOSIT, SLOT_DURATION, VERSION,
 };
+use sp_core::H256;
+use sp_runtime::traits::BlakeTwo256;
 
 const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(75);
 
@@ -161,4 +163,16 @@ impl pallet_sudo::Config for Runtime {
 impl pallet_template::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
 	type WeightInfo = pallet_template::weights::SubstrateWeight<Runtime>;
+}
+
+impl pallet_dataassets::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type MaxNameLength = ConstU32<256>;
+    type MaxDescriptionLength = ConstU32<1024>;
+}
+
+impl crate::custom_header::AssetsStateRootProvider<sp_runtime::traits::BlakeTwo256> for Runtime {
+    fn compute_assets_state_root() -> sp_core::H256 {
+        pallet_dataassets::Pallet::<Runtime>::compute_asset_root()
+    }
 }

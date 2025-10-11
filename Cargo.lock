@@ -5946,6 +5946,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "pallet-dataassets"
+version = "0.1.0"
+dependencies = [
+ "frame-benchmarking",
+ "frame-support",
+ "frame-system",
+ "log",
+ "pallet-timestamp",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-core 36.1.0",
+ "sp-io",
+ "sp-runtime",
+ "sp-std",
+]
+
+[[package]]
 name = "pallet-grandpa"
 version = "40.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9599,6 +9616,7 @@ dependencies = [
  "log",
  "pallet-aura",
  "pallet-balances",
+ "pallet-dataassets",
  "pallet-grandpa",
  "pallet-sudo",
  "pallet-template",

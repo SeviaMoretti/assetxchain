@@ -230,3 +230,43 @@ the correct dependencies, activate direnv `direnv allow`.
 Please follow the [Substrate Docker instructions
 here](https://github.com/paritytech/polkadot-sdk/blob/master/substrate/docker/README.md) to
 build the Docker container with the Substrate Node Template binary.
+
+
+Child Trie
+substrate-node-template-solochain/
+├── Cargo.toml                          # Workspace 配置
+│
+├── node/                               # Node (客户端)
+│   ├── Cargo.toml
+│   └── src/
+│       ├── main.rs
+│       ├── chain_spec.rs
+│       ├── cli.rs
+│       ├── command.rs
+│       ├── rpc.rs
+│       └── service.rs
+│
+├── runtime/                            # Runtime (链上逻辑)
+│   ├── Cargo.toml
+│   ├── build.rs
+│   └── src/
+│       ├── lib.rs                      #  修改
+│       ├── apis.rs
+│       ├── custom_header.rs            #  修改
+│       ├── genesis_config_presets.rs
+│       └── configs/
+│           ├── mod.rs
+│           ├── pallet_balances.rs
+│           └── ...
+│
+└── pallets/                            # Pallets
+    ├── template/                       # 模板 pallet
+    │   └── ...
+    │
+    └── dataassets/                     # 新增资产管理 pallet
+        ├── Cargo.toml                  # 新建
+        └── src/
+            ├── lib.rs                  # 主逻辑
+            ├── types.rs                # 数据类型
+            ├── tests.rs                # 测试
+            └── benchmarking.rs         

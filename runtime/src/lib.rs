@@ -16,6 +16,7 @@ use sp_runtime::{
 	traits::{BlakeTwo256, IdentifyAccount, Verify},
 	MultiAddress, MultiSignature,
 };
+use sp_runtime::generic::Header as HeaderT;
 #[cfg(feature = "std")]
 use sp_version::NativeVersion;
 use sp_version::RuntimeVersion;
@@ -229,4 +230,34 @@ mod runtime {
 	// Include the custom logic from the pallet-template in the runtime.
 	#[runtime::pallet_index(7)]
 	pub type Template = pallet_template;
+
+	#[runtime::pallet_index(8)]
+    pub type DataAssets = pallet_dataassets;
+}
+
+pub mod block_finalization {
+    use super::*;
+    use sp_runtime::traits::Header as HeaderT;
+    use frame_support::traits::OnFinalize;
+    
+    /// 自定义的 finalize_block，在标准 finalize 后更新 asset_root
+    /// 1. 执行所有 pallet 的 on_finalize
+    /// 2. 最终化 System pallet 获取区块头
+    /// 3. 计算并设置 asset_root
+    pub fn finalize_block(block_number: BlockNumber) -> Header {
+        //1: 执行所有 pallet 的 on_finalize 钩子
+        // 调用 pallet-dataassets 的 on_finalize，计算 asset_root
+        <AllPalletsWithSystem as frame_support::traits::OnFinalize<BlockNumber>>::on_finalize(block_number);
+        
+        //2: 最终化 System pallet，获取区块头
+        let mut header = <frame_system::Pallet<Runtime>>::finalize();
+        
+        //3: 从 pallet-dataassets 获取计算好的 asset_root
+        let asset_root = <Runtime as crate::custom_header::AssetsStateRootProvider<BlakeTwo256>>::compute_assets_state_root();
+        
+        //4: 将 asset_root 设置到区块头
+        header.set_asset_root(asset_root);
+        
+        header
+    }
 }

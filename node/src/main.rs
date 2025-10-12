@@ -7,10 +7,6 @@ mod cli;
 mod command;
 mod rpc;
 mod service;
-mod kvdb_hashdb;
-mod dataasset;
-mod mpt;
-mod mpt_manager;
 
 fn main() -> sc_cli::Result<()> {
 	command::run()

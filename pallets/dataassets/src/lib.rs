@@ -17,6 +17,7 @@ use alloc::vec::Vec;
 
 pub use pallet::*;
 pub mod types;
+pub mod digest_item;
 
 #[cfg(test)]
 mod tests;
@@ -81,7 +82,14 @@ pub mod pallet {
     #[pallet::hooks]
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
         fn on_finalize(_n: BlockNumberFor<T>) {
+            //计算asset root
             let root = Self::compute_asset_root();
+            
+            //创建digest item并添加到区块头的digest中
+            let digest_item = crate::digest_item::create_asset_root_digest(root);
+            frame_system::Pallet::<T>::deposit_log(digest_item);
+            
+            //事件
             Self::deposit_event(Event::AssetRootUpdated { root });
         }
     }
@@ -267,8 +275,7 @@ pub mod pallet {
         fn insert_asset(asset_id: &[u8; 32], asset: &DataAsset<T::AccountId>) -> DispatchResult {
             let child_info = Self::asset_trie_info();
             let key = Self::make_asset_key(asset_id);
-            let value = asset.encode();
-            child::put(&child_info, &key, &value);
+            child::put(&child_info, &key, asset);
             Ok(())
         }
         
@@ -289,7 +296,7 @@ pub mod pallet {
             
             let current = child::get::<u32>(&child_info, &key).unwrap_or(0);  // ← 添加类型注解
             let next = current.saturating_add(1);
-            child::put(&child_info, &key, &next.encode());
+            child::put(&child_info, &key, &next);
             current
         }
         
@@ -324,8 +331,7 @@ pub mod pallet {
         fn insert_certificate(asset_id: &[u8; 32], cert: &RightToken<T::AccountId>) -> DispatchResult {
             let child_info = Self::certificate_trie_info(asset_id);
             let key = cert.certificate_id.to_le_bytes();
-            let value = cert.encode();
-            child::put(&child_info, &key, &value);
+            child::put(&child_info, &key, cert);
             Ok(())
         }
         
@@ -398,5 +404,18 @@ pub mod pallet {
         //     addr.copy_from_slice(&hash[..20]);
         //     H160::from(addr)
         // }
+    }
+
+    impl<T: Config> Pallet<T> {
+        /// Get asset root from a block's digest
+        pub fn get_asset_root_from_digest(digest: &sp_runtime::Digest) -> Option<H256> {
+            crate::digest_item::extract_asset_root(digest)
+        }
+        
+        /// Get asset root from current block's digest
+        pub fn current_block_asset_root() -> Option<H256> {
+            let digest = frame_system::Pallet::<T>::digest();
+            Self::get_asset_root_from_digest(&digest)
+        }
     }
 }

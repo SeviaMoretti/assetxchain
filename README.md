@@ -232,7 +232,7 @@ here](https://github.com/paritytech/polkadot-sdk/blob/master/substrate/docker/RE
 build the Docker container with the Substrate Node Template binary.
 
 
-Child Trie
+### Child Trie目录
 substrate-node-template-solochain/
 ├── Cargo.toml                          # Workspace 配置
 │

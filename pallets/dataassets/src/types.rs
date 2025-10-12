@@ -1,6 +1,6 @@
 extern crate alloc;
 use alloc::format;
-use codec::{Encode, Decode, MaxEncodedLen};
+use codec::{Encode, Decode};
 use sp_std::vec::Vec;
 use sp_core::{H256, H160};
 use scale_info::TypeInfo;
@@ -10,8 +10,9 @@ pub const ASSET_PROTOCOL_VERSION: &str = "1.0";
 pub const RIGHT_TOKEN_PROTOCOL_VERSION: &str = "1.0";
 
 /// Data Asset Structure
+// ！！！！结构体字段太多了，要拆分成几个子结构体1、核心dataasset2、assetMetadata3、统计数据4、加密信息等
 #[derive(Encode, Decode, Clone, PartialEq, Eq, Debug, TypeInfo)]
-pub struct DataAsset {
+pub struct DataAsset<AccountId> {
     // Protocol version
     pub version: Vec<u8>,
     
@@ -34,7 +35,7 @@ pub struct DataAsset {
     pub raw_data_hash: H256,
     
     // Ownership
-    pub owner: H160,
+    pub owner: AccountId,
     
     // IPFS storage info
     pub metadata_cid: Vec<u8>,
@@ -73,7 +74,7 @@ pub struct DataAsset {
 
 /// Right Token (Certificate) Structure
 #[derive(Encode, Decode, Clone, PartialEq, Eq, Debug, TypeInfo)]
-pub struct RightToken {
+pub struct RightToken<AccountId> {
     // Protocol version
     pub version: Vec<u8>,
     
@@ -93,8 +94,8 @@ pub struct RightToken {
     pub valid_until: Option<u64>,
     
     // Ownership
-    pub owner: H160,
-    pub issuer: H160,
+    pub owner: AccountId,
+    pub issuer: AccountId,
     
     // Transaction info
     pub nonce: u32,
@@ -159,7 +160,7 @@ pub struct PricingConfig {
 }
 
 // Default implementations
-impl Default for DataAsset {
+impl<AccountId: Default> Default for DataAsset<AccountId> {
     fn default() -> Self {
         Self {
             version: ASSET_PROTOCOL_VERSION.as_bytes().to_vec(),
@@ -173,7 +174,7 @@ impl Default for DataAsset {
             analyzing_feature: Vec::new(),
             integrity: Vec::new(),
             raw_data_hash: H256::zero(),
-            owner: H160::zero(),
+            owner: AccountId::default(),
             metadata_cid: Vec::new(),
             data_cid_merkle_nodes: Vec::new(),
             timestamp: 0,
@@ -194,7 +195,7 @@ impl Default for DataAsset {
     }
 }
 
-impl Default for RightToken {
+impl<AccountId: Default> Default for RightToken<AccountId> {
     fn default() -> Self {
         Self {
             version: RIGHT_TOKEN_PROTOCOL_VERSION.as_bytes().to_vec(),
@@ -205,8 +206,8 @@ impl Default for RightToken {
             confirm_time: 0,
             valid_from: 0,
             valid_until: None,
-            owner: H160::zero(),
-            issuer: H160::zero(),
+            owner: AccountId::default(),
+            issuer: AccountId::default(),
             nonce: 0,
             parent_asset_id: [0u8; 32],
             parent_asset_token_id: 0,
@@ -238,13 +239,16 @@ impl Default for PricingConfig {
 }
 
 // Utility methods
-impl DataAsset {
+impl<AccountId: Clone> DataAsset<AccountId> {
     /// Generate asset ID from owner, timestamp, and data hash
-    pub fn generate_asset_id(owner: &H160, timestamp: u64, data_hash: &H256) -> [u8; 32] {
+    pub fn generate_asset_id(owner: &AccountId, timestamp: u64, data_hash: &H256) -> [u8; 32]
+    where
+        AccountId: Encode,
+    {
         use sp_io::hashing::blake2_256;
         
         let mut input = Vec::new();
-        input.extend_from_slice(owner.as_bytes());
+        input.extend_from_slice(&owner.encode());
         input.extend_from_slice(&timestamp.to_le_bytes());
         input.extend_from_slice(data_hash.as_bytes());
         
@@ -262,7 +266,7 @@ impl DataAsset {
     }
 }
 
-impl RightToken {
+impl<AccountId> RightToken<AccountId> {
     /// Generate token ID from parent token ID and certificate sequence
     pub fn generate_token_id(parent_token_id: u32, certificate_sequence: u32) -> Vec<u8> {
         let token_str = format!("{}|{}", parent_token_id, certificate_sequence);
@@ -279,5 +283,137 @@ impl RightToken {
     /// Check if certificate is expired
     pub fn is_expired(&self, current_time: u64) -> bool {
         self.valid_until.map_or(false, |until| current_time > until)
+    }
+}
+
+// Builder pattern constructors
+impl<AccountId: Clone + Encode> DataAsset<AccountId> {
+    /// Create a minimal DataAsset with only required fields
+    pub fn minimal(
+        owner: AccountId, 
+        name: Vec<u8>, 
+        description: Vec<u8>, 
+        raw_data_hash: H256, 
+        timestamp: u64
+    ) -> Self {
+        Self {
+            // Protocol version
+            version: b"1.0".to_vec(),
+            
+            // IDs (will be set by caller)
+            asset_id: [0u8; 32],
+            token_id: 0,
+            
+            // Basic info
+            name,
+            description,
+            quantity: Vec::new(),
+            labels: Vec::new(),
+            
+            // Data characteristics
+            statistical_characteristic: Vec::new(),
+            analyzing_feature: Vec::new(),
+            integrity: Vec::new(),
+            raw_data_hash,
+            
+            // Ownership
+            owner,
+            
+            // IPFS storage
+            metadata_cid: Vec::new(),
+            data_cid_merkle_nodes: Vec::new(),
+            
+            // Timestamps
+            timestamp,
+            confirm_time: timestamp,
+            signature: Vec::new(),
+            
+            // Transaction state
+            nonce: 0,
+            is_locked: false,
+            
+            // Encryption
+            encryption_info: EncryptionInfo {
+                algorithm: Vec::new(),
+                key_length: 0,
+                parameters_hash: H256::zero(),
+                is_encrypted: false,
+            },
+            
+            // Certificate root
+            children_root: [0u8; 32],
+            
+            // Statistics
+            view_count: 0,
+            download_count: 0,
+            transaction_count: 0,
+            total_revenue: 0,
+            
+            // Pricing
+            pricing_config: PricingConfig {
+                base_price: 0,
+                currency: b"NATIVE".to_vec(),
+            },
+            
+            // Status
+            status: AssetStatus::Active,
+            updated_at: timestamp,
+        }
+    }
+}
+
+impl<AccountId: Clone> RightToken<AccountId> {
+    /// Create a minimal RightToken with only required fields
+    pub fn minimal(
+        certificate_id: u32,
+        right_type: RightType,
+        holder: AccountId,
+        issuer: AccountId,
+        parent_asset_id: [u8; 32],
+        parent_asset_token_id: u32,
+        current_time: u64,
+        valid_until: Option<u64>
+    ) -> Self {
+        let token_id = Self::generate_token_id(parent_asset_token_id, certificate_id);
+        
+        Self {
+            // Protocol version
+            version: b"1.0".to_vec(),
+            
+            // Token ID (will be set by caller)
+            token_id,
+            
+            // Certificate ID
+            certificate_id,
+            
+            // Right type
+            right_type,
+            
+            // Time info
+            create_time: current_time,
+            confirm_time: current_time,
+            valid_from: current_time,
+            valid_until,
+            
+            // Ownership
+            owner: holder,
+            issuer,
+            
+            // Transaction info
+            nonce: 0,
+            
+            // Parent asset reference
+            parent_asset_id,
+            parent_asset_token_id,
+            
+            // Status
+            status: CertificateStatus::Active,
+            
+            // Traceability
+            right_token_from: None,
+            
+            // Signature
+            signature: Vec::new(),
+        }
     }
 }

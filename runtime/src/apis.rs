@@ -87,8 +87,8 @@ impl_runtime_apis! {
 		}
 
 		fn finalize_block() -> <Block as BlockT>::Header {
-			// Executive::finalize_block()
-			crate::block_finalization::finalize_block(System::block_number())
+			Executive::finalize_block()
+			//crate::block_finalization::finalize_block(System::block_number())
 		}
 
 		fn inherent_extrinsics(data: sp_inherents::InherentData) -> Vec<<Block as BlockT>::Extrinsic> {

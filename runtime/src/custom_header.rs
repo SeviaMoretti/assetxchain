@@ -155,11 +155,26 @@ where
 		self.asset_root = root;
 	}
 	
-	/// Convenience helper for computing the hash of the header without having
-	/// to import the trait.
 	pub fn hash(&self) -> Hash::Output {
 		Hash::hash_of(self)
 	}
+}
+
+impl<Number, Hash> Default for CustomHeader<Number, Hash>
+where
+    Number: BlockNumber,
+    Hash: HashT,
+{
+    fn default() -> Self {
+        Self {
+            parent_hash: Default::default(),
+            number: Default::default(),
+            state_root: Default::default(),
+            extrinsics_root: Default::default(),
+            digest: Default::default(),
+            asset_root: H256::zero(),
+        }
+    }
 }
 
 pub trait AssetsStateRootProvider<Hash: sp_runtime::traits::Hash> {

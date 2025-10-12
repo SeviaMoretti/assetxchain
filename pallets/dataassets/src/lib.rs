@@ -58,9 +58,9 @@ pub mod pallet {
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
-        AssetRegistered { asset_id: [u8; 32], token_id: u32, owner: H160 },
-        CertificateIssued { asset_id: [u8; 32], certificate_id: u32, holder: H160 },
-        AssetTransferred { asset_id: [u8; 32], from: H160, to: H160 },
+        AssetRegistered { asset_id: [u8; 32], token_id: u32, owner: T::AccountId },
+        CertificateIssued { asset_id: [u8; 32], certificate_id: u32, holder: T::AccountId },
+        AssetTransferred { asset_id: [u8; 32], from: T::AccountId, to: T::AccountId },
         CertificateRevoked { asset_id: [u8; 32], certificate_id: u32 },
         AssetRootUpdated { root: H256 },
     }
@@ -107,30 +107,20 @@ pub mod pallet {
                 Error::<T>::DescriptionTooLong
             );
             
-            let owner = Self::account_to_h160(&who);
             let timestamp = Self::current_timestamp();
-            let asset_id = DataAsset::generate_asset_id(&owner, timestamp, &raw_data_hash);
+            let asset_id = DataAsset::generate_asset_id(&who, timestamp, &raw_data_hash);
             let token_id = Self::get_and_increment_token_id();
             
-            let asset = DataAsset {
-                asset_id,
-                token_id,
-                name,
-                description,
-                raw_data_hash,
-                owner,
-                timestamp,
-                confirm_time: timestamp,
-                status: AssetStatus::Active,
-                updated_at: timestamp,
-                ..Default::default()
-            };
+            // 使用 minimal 构造函数
+            let mut asset = DataAsset::minimal(who.clone(), name, description, raw_data_hash, timestamp);
+            asset.asset_id = asset_id;
+            asset.token_id = token_id;
             
             Self::insert_asset(&asset_id, &asset)?;
             Self::set_token_mapping(token_id, asset_id);
             Self::initialize_certificate_trie(&asset_id);
             
-            Self::deposit_event(Event::AssetRegistered { asset_id, token_id, owner });
+            Self::deposit_event(Event::AssetRegistered { asset_id, token_id, owner: who });
             Ok(())
         }
 
@@ -139,15 +129,14 @@ pub mod pallet {
         pub fn issue_certificate(
             origin: OriginFor<T>,
             asset_id: [u8; 32],
-            holder: H160,
-            right_type: u8,  // ← 改为 u8 (1=Usage, 2=Access)
+            holder: T::AccountId,
+            right_type: u8,
             valid_until: Option<u64>,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
-            let caller = Self::account_to_h160(&who);
             
             let asset = Self::get_asset(&asset_id).ok_or(Error::<T>::AssetNotFound)?;
-            ensure!(asset.owner == caller, Error::<T>::NotOwner);
+            ensure!(asset.owner == who, Error::<T>::NotOwner);
             ensure!(asset.is_active(), Error::<T>::AssetNotActive);
             
             // 转换 u8 到 RightType
@@ -160,22 +149,19 @@ pub mod pallet {
             let certificate_id = Self::get_next_certificate_id(&asset_id);
             let current_time = Self::current_timestamp();
             
-            let certificate = RightToken {
+            // 使用 minimal 构造函数
+            let mut certificate = RightToken::minimal(
                 certificate_id,
-                right_type: right_type_enum,
-                create_time: current_time,
-                confirm_time: current_time,
-                valid_from: current_time,
-                valid_until,
-                owner: holder,
-                issuer: asset.owner,
-                parent_asset_id: asset_id,
-                parent_asset_token_id: asset.token_id,
-                token_id: RightToken::generate_token_id(asset.token_id, certificate_id),
-                status: CertificateStatus::Active,
-                ..Default::default()
-            };
-            
+                right_type_enum,
+                holder.clone(),
+                asset.owner.clone(),
+                asset_id,
+                asset.token_id,
+                current_time,
+                valid_until
+            );
+            // certificate.token_id = RightToken::generate_token_id(asset.token_id, certificate_id);
+
             Self::insert_certificate(&asset_id, &certificate)?;
             Self::update_asset_certificate_root(&asset_id)?;
             
@@ -188,17 +174,16 @@ pub mod pallet {
         pub fn transfer_asset(
             origin: OriginFor<T>,
             asset_id: [u8; 32],
-            new_owner: H160,
+            new_owner: T::AccountId,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
-            let caller = Self::account_to_h160(&who);
             
             let mut asset = Self::get_asset(&asset_id).ok_or(Error::<T>::AssetNotFound)?;
-            ensure!(asset.owner == caller, Error::<T>::NotOwner);
+            ensure!(asset.owner == who, Error::<T>::NotOwner);
             ensure!(!asset.is_locked(), Error::<T>::AssetLocked);
             
-            let old_owner = asset.owner;
-            asset.owner = new_owner;
+            let old_owner = asset.owner.clone();
+            asset.owner = new_owner.clone();
             asset.nonce += 1;
             asset.transaction_count += 1;
             asset.confirm_time = Self::current_timestamp();
@@ -218,13 +203,13 @@ pub mod pallet {
             certificate_id: u32,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
-            let caller = Self::account_to_h160(&who);
+            // let caller = Self::account_to_h160(&who);
             
             let asset = Self::get_asset(&asset_id).ok_or(Error::<T>::AssetNotFound)?;
             let cert = Self::get_certificate(&asset_id, certificate_id)
                 .ok_or(Error::<T>::CertificateNotFound)?;
             
-            ensure!(asset.owner == caller || cert.owner == caller, Error::<T>::NotOwner);
+            ensure!(asset.owner == who || cert.owner == who, Error::<T>::NotOwner);
             
             Self::remove_certificate(&asset_id, certificate_id)?;
             Self::update_asset_certificate_root(&asset_id)?;
@@ -237,10 +222,10 @@ pub mod pallet {
         #[pallet::weight(10_000)]
         pub fn lock_asset(origin: OriginFor<T>, asset_id: [u8; 32]) -> DispatchResult {
             let who = ensure_signed(origin)?;
-            let caller = Self::account_to_h160(&who);
+            // let caller = Self::account_to_h160(&who);
             
             let mut asset = Self::get_asset(&asset_id).ok_or(Error::<T>::AssetNotFound)?;
-            ensure!(asset.owner == caller, Error::<T>::NotOwner);
+            ensure!(asset.owner == who, Error::<T>::NotOwner);
             
             asset.is_locked = true;
             asset.status = AssetStatus::Locked;
@@ -254,10 +239,10 @@ pub mod pallet {
         #[pallet::weight(10_000)]
         pub fn unlock_asset(origin: OriginFor<T>, asset_id: [u8; 32]) -> DispatchResult {
             let who = ensure_signed(origin)?;
-            let caller = Self::account_to_h160(&who);
+            // let caller = Self::account_to_h160(&who);
             
             let mut asset = Self::get_asset(&asset_id).ok_or(Error::<T>::AssetNotFound)?;
-            ensure!(asset.owner == caller, Error::<T>::NotOwner);
+            ensure!(asset.owner == who, Error::<T>::NotOwner);
             
             asset.is_locked = false;
             asset.status = AssetStatus::Active;
@@ -279,7 +264,7 @@ pub mod pallet {
             key
         }
         
-        fn insert_asset(asset_id: &[u8; 32], asset: &DataAsset) -> DispatchResult {
+        fn insert_asset(asset_id: &[u8; 32], asset: &DataAsset<T::AccountId>) -> DispatchResult {
             let child_info = Self::asset_trie_info();
             let key = Self::make_asset_key(asset_id);
             let value = asset.encode();
@@ -287,13 +272,13 @@ pub mod pallet {
             Ok(())
         }
         
-        pub fn get_asset(asset_id: &[u8; 32]) -> Option<DataAsset> {
+        pub fn get_asset(asset_id: &[u8; 32]) -> Option<DataAsset<T::AccountId>> {
             let child_info = Self::asset_trie_info();
             let key = Self::make_asset_key(asset_id);
-            child::get::<DataAsset>(&child_info, &key)  // ← 添加类型注解
+            child::get::<DataAsset<T::AccountId>>(&child_info, &key)
         }
         
-        pub fn get_asset_by_token_id(token_id: u32) -> Option<DataAsset> {
+        pub fn get_asset_by_token_id(token_id: u32) -> Option<DataAsset<T::AccountId>> {
             let asset_id = Self::get_token_mapping(token_id)?;
             Self::get_asset(&asset_id)
         }
@@ -336,7 +321,7 @@ pub mod pallet {
             child::put(&child_info, b"_init", &[1u8]);
         }
         
-        fn insert_certificate(asset_id: &[u8; 32], cert: &RightToken) -> DispatchResult {
+        fn insert_certificate(asset_id: &[u8; 32], cert: &RightToken<T::AccountId>) -> DispatchResult {
             let child_info = Self::certificate_trie_info(asset_id);
             let key = cert.certificate_id.to_le_bytes();
             let value = cert.encode();
@@ -344,10 +329,10 @@ pub mod pallet {
             Ok(())
         }
         
-        pub fn get_certificate(asset_id: &[u8; 32], cert_id: u32) -> Option<RightToken> {
+        pub fn get_certificate(asset_id: &[u8; 32], cert_id: u32) -> Option<RightToken<T::AccountId>> {
             let child_info = Self::certificate_trie_info(asset_id);
             let key = cert_id.to_le_bytes();
-            child::get::<RightToken>(&child_info, &key)  // ← 添加类型注解
+            child::get::<RightToken<T::AccountId>>(&child_info, &key)  // ← 添加类型注解
         }
         
         fn remove_certificate(asset_id: &[u8; 32], cert_id: u32) -> DispatchResult {
@@ -373,7 +358,7 @@ pub mod pallet {
             Ok(())
         }
         
-        pub fn get_asset_certificates(asset_id: &[u8; 32]) -> Vec<RightToken> {
+        pub fn get_asset_certificates(asset_id: &[u8; 32]) -> Vec<RightToken<T::AccountId>> {
             let mut certificates = Vec::new();
             for i in 0u32..1000 {
                 if let Some(cert) = Self::get_certificate(asset_id, i) {
@@ -389,7 +374,7 @@ pub mod pallet {
             
             for i in 0u32..1000 {
                 let key = i.to_le_bytes();
-                if child::get::<RightToken>(&child_info, &key).is_some() {  // ← 添加类型注解
+                if child::get::<RightToken<T::AccountId>>(&child_info, &key).is_some() {  // ← 添加类型注解
                     max_id = i;
                 }
             }
@@ -407,11 +392,11 @@ pub mod pallet {
             <pallet_timestamp::Pallet<T>>::get().saturated_into::<u64>()
         }
         
-        fn account_to_h160(account: &T::AccountId) -> H160 {
-            let hash = blake2_256(&account.encode());
-            let mut addr = [0u8; 20];
-            addr.copy_from_slice(&hash[..20]);
-            H160::from(addr)
-        }
+        // fn account_to_h160(account: &T::AccountId) -> H160 {
+        //     let hash = blake2_256(&account.encode());
+        //     let mut addr = [0u8; 20];
+        //     addr.copy_from_slice(&hash[..20]);
+        //     H160::from(addr)
+        // }
     }
 }

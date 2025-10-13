@@ -28,6 +28,7 @@ pub use pallet_timestamp::Call as TimestampCall;
 pub use sp_runtime::BuildStorage;
 
 pub mod genesis_config_presets;
+pub mod runtime_api;
 
 use crate::custom_header::CustomHeader;
 /// Opaque types. These are used by the CLI to instantiate machinery that don't need to know
@@ -74,7 +75,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	//   `spec_version`, and `authoring_version` are the same between Wasm and native.
 	// This value is set to 100 to notify Polkadot-JS App (https://polkadot.js.org/apps) to use
 	//   the compatible custom types.
-	spec_version: 101,
+	spec_version: 102,
 	impl_version: 1,
 	apis: apis::RUNTIME_API_VERSIONS,
 	transaction_version: 1,

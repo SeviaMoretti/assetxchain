@@ -32,13 +32,14 @@ use frame_support::{
 use pallet_grandpa::AuthorityId as GrandpaId;
 use sp_api::impl_runtime_apis;
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
-use sp_core::{crypto::KeyTypeId, OpaqueMetadata};
+use sp_core::{crypto::KeyTypeId, OpaqueMetadata, H256};
 use sp_runtime::{
 	traits::{Block as BlockT, NumberFor},
 	transaction_validity::{TransactionSource, TransactionValidity},
 	ApplyExtrinsicResult,
 };
 use sp_version::RuntimeVersion;
+use pallet_dataassets as pallet_data_assets;
 
 // Local module imports
 use super::{
@@ -300,6 +301,28 @@ impl_runtime_apis! {
 
 		fn preset_names() -> Vec<sp_genesis_builder::PresetId> {
 			crate::genesis_config_presets::preset_names()
+		}
+	}
+
+	impl crate::runtime_api::DataAssetsApi<Block, AccountId> for Runtime {
+		fn get_asset(asset_id: [u8; 32]) -> Option<pallet_data_assets::types::DataAsset<AccountId>> {
+			pallet_data_assets::Pallet::<Runtime>::get_asset(&asset_id)
+		}
+		
+		fn get_asset_by_token_id(token_id: u32) -> Option<pallet_data_assets::types::DataAsset<AccountId>> {
+			pallet_data_assets::Pallet::<Runtime>::get_asset_by_token_id(token_id)
+		}
+		
+		fn get_certificate(asset_id: [u8; 32], cert_id: u32) -> Option<pallet_data_assets::types::RightToken<AccountId>> {
+			pallet_data_assets::Pallet::<Runtime>::get_certificate(&asset_id, cert_id)
+		}
+		
+		fn get_asset_certificates(asset_id: [u8; 32]) -> Vec<pallet_data_assets::types::RightToken<AccountId>> {
+			pallet_data_assets::Pallet::<Runtime>::get_asset_certificates(&asset_id)
+		}
+		
+		fn get_asset_root() -> H256 {
+			pallet_data_assets::Pallet::<Runtime>::compute_asset_root()
 		}
 	}
 }

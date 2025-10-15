@@ -23,6 +23,10 @@ frame-system-rpc-runtime-api.workspace = true
 frame-system.workspace = true
 frame-try-runtime = { optional = true, workspace = true }
 pallet-aura.workspace = true
+pallet-babe.workspace = true
+sp-consensus-babe.workspace = true
+pallet-session.workspace = true
+pallet-authorship.workspace = true
 pallet-balances.workspace = true
 pallet-grandpa.workspace = true
 pallet-sudo.workspace = true
@@ -72,6 +76,10 @@ std = [
 	"frame-try-runtime?/std",
 	"log/std",
 	"pallet-aura/std",
+	"pallet-babe/std",
+    "sp-consensus-babe/std",
+    "pallet-session/std",
+    "pallet-authorship/std",
 	"pallet-balances/std",
 	"pallet-grandpa/std",
 	"pallet-sudo/std",

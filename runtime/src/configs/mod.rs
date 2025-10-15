@@ -26,7 +26,7 @@
 // Substrate and Polkadot dependencies
 use frame_support::{
 	derive_impl, parameter_types,
-	traits::{ConstBool, ConstU128, ConstU32, ConstU64, ConstU8, VariantCountOf},
+	traits::{ConstU128, ConstU32, ConstU64, ConstU8, VariantCountOf},
 	weights::{
 		constants::{RocksDbWeight, WEIGHT_REF_TIME_PER_SECOND},
 		IdentityFee, Weight,
@@ -34,18 +34,21 @@ use frame_support::{
 };
 use frame_system::limits::{BlockLength, BlockWeights};
 use pallet_transaction_payment::{ConstFeeMultiplier, FungibleAdapter, Multiplier};
-use sp_consensus_aura::sr25519::AuthorityId as AuraId;
+// use sp_consensus_aura::sr25519::AuthorityId as AuraId;
+use sp_consensus_babe::{AuthorityId as BabeId};
+use sp_runtime::traits::OpaqueKeys;
+use frame_support::traits::{FindAuthor, KeyOwnerProofSystem};
 use sp_runtime::{traits::One, Perbill};
 use sp_version::RuntimeVersion;
+use pallet_session::ShouldEndSession;
 
 // Local module imports
 use super::{
-	AccountId, Aura, Balance, Balances, Block, BlockNumber, Hash, Nonce, PalletInfo, Runtime,
+	AccountId, Balance, Balances, Block, BlockNumber, Hash, Nonce, PalletInfo, Runtime,
 	RuntimeCall, RuntimeEvent, RuntimeFreezeReason, RuntimeHoldReason, RuntimeOrigin, RuntimeTask,
-	System, EXISTENTIAL_DEPOSIT, SLOT_DURATION, VERSION,
+	System, EXISTENTIAL_DEPOSIT, SLOT_DURATION, VERSION, DAYS, HOURS, MILLI_SECS_PER_BLOCK,
+	Babe, SessionKeys, Session,
 };
-use sp_core::H256;
-use sp_runtime::traits::BlakeTwo256;
 
 const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(75);
 
@@ -92,13 +95,83 @@ impl frame_system::Config for Runtime {
 	type MaxConsumers = frame_support::traits::ConstU32<16>;
 }
 
-impl pallet_aura::Config for Runtime {
-	type AuthorityId = AuraId;
-	type DisabledValidators = ();
-	type MaxAuthorities = ConstU32<32>;
-	type AllowMultipleBlocksPerSlot = ConstBool<false>;
-	type SlotDuration = pallet_aura::MinimumPeriodTimesTwo<Runtime>;
+// BABE参数
+parameter_types! {
+    // Epoch 持续时间（slot 数量）
+    // 2400 个 slot × 6 秒 = 4 小时一个 epoch
+    pub const EpochDuration: u64 = 2400;
+    
+    // 期望的区块时间（毫秒）
+    pub const ExpectedBlockTime: u64 = MILLI_SECS_PER_BLOCK;
+    
+    // 报告延迟
+    pub const ReportLongevity: u64 = 
+        ((DAYS as u64) * 7) as u64;
 }
+
+// Session
+parameter_types! {
+    pub const Period: u32 = 6 * HOURS; // 一个 session 6 小时
+    pub const Offset: u32 = 0;
+}
+
+impl pallet_babe::Config for Runtime {
+    type EpochDuration = EpochDuration;
+    type ExpectedBlockTime = ExpectedBlockTime;
+    type EpochChangeTrigger = pallet_babe::SameAuthoritiesForever;
+    type DisabledValidators = (); //pallet_session::Pallet<Runtime>;
+    type WeightInfo = ();
+    type MaxAuthorities = frame_support::traits::ConstU32<32>;
+    type MaxNominators = frame_support::traits::ConstU32<0>; // 暂时不使用 nominator
+    type KeyOwnerProof = sp_core::Void; // 简化
+    type EquivocationReportSystem = (); // 简化
+}
+
+pub struct ValidatorIdOf;
+impl sp_runtime::traits::Convert<AccountId, Option<AccountId>> for ValidatorIdOf {
+    fn convert(account: AccountId) -> Option<AccountId> {
+        Some(account)
+    }
+}
+
+impl pallet_session::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type ValidatorId = AccountId;
+    type ValidatorIdOf = ValidatorIdOf;
+    type ShouldEndSession = pallet_session::PeriodicSessions<Period, Offset>;
+    type NextSessionRotation = pallet_session::PeriodicSessions<Period, Offset>;
+    type SessionManager = (); // 简化
+    type SessionHandler = <SessionKeys as OpaqueKeys>::KeyTypeIdProviders;
+    type Keys = SessionKeys;
+    type WeightInfo = ();
+	type DisablingStrategy = ();
+}
+
+// pub struct FindAuthorTruncated;
+// impl FindAuthor<AccountId> for FindAuthorTruncated {	
+//     fn find_author<'a, I>(digests: I) -> Option<AccountId>
+//     where
+//         I: 'a + IntoIterator<Item = (sp_runtime::ConsensusEngineId, &'a [u8])>,
+//     {
+//         pallet_babe::Pallet::<Runtime>::find_author(digests)
+//             .and_then(|k| 
+//                 AccountId::try_from(k.as_ref()).ok()
+//             )
+//     }
+// }
+
+impl pallet_authorship::Config for Runtime {
+    type FindAuthor = pallet_session::FindAccountFromAuthorIndex<Self, Babe>;
+    type EventHandler = (); // 之后添加区块奖励处理
+}
+
+// impl pallet_aura::Config for Runtime {
+// 	type AuthorityId = AuraId;
+// 	type DisabledValidators = ();
+// 	type MaxAuthorities = ConstU32<32>;
+// 	type AllowMultipleBlocksPerSlot = ConstBool<false>;
+// 	type SlotDuration = pallet_aura::MinimumPeriodTimesTwo<Runtime>;
+// }
 
 impl pallet_grandpa::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
@@ -115,7 +188,7 @@ impl pallet_grandpa::Config for Runtime {
 impl pallet_timestamp::Config for Runtime {
 	/// A timestamp: milliseconds since the unix epoch.
 	type Moment = u64;
-	type OnTimestampSet = Aura;
+	type OnTimestampSet = Babe;
 	type MinimumPeriod = ConstU64<{ SLOT_DURATION / 2 }>;
 	type WeightInfo = ();
 }

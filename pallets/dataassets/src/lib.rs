@@ -18,6 +18,7 @@ use alloc::vec::Vec;
 pub use pallet::*;
 pub mod types;
 pub mod digest_item;
+pub mod collateral;
 
 #[cfg(test)]
 mod tests;
@@ -25,16 +26,20 @@ mod tests;
 #[cfg(feature = "runtime-benchmarks")]
 mod benchmarking;
 
+pub use collateral::BalanceOf;
+
+// 需要和 runtime/src/lib.rs 中的对应值保持一致
+pub const MILLI_SECS_PER_BLOCK: u64 = 18000;
+
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
     use frame_support::pallet_prelude::*;
     use frame_system::pallet_prelude::*;
-    use sp_core::{H256, H160};
+    use sp_core::H256;
     use frame_support::storage::child;
-    use sp_io::hashing::blake2_256;
-    use codec::{Encode, Decode};
     use sp_runtime::traits::SaturatedConversion;
+    use frame_support::traits::{Currency, ReservableCurrency};
     
     use crate::types::*;
 
@@ -49,21 +54,56 @@ pub mod pallet {
     pub trait Config: frame_system::Config + pallet_timestamp::Config {
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
         
+        /// Currency type for handling collateral
+        type Currency: Currency<Self::AccountId> + ReservableCurrency<Self::AccountId>;
+        
+        /// Base collateral amount (e.g., 2000 DATA)
+        #[pallet::constant]
+        type BaseCollateral: Get<BalanceOf<Self>>;
+        
+        /// Collateral per MB of data (e.g., 100 DATA/MB)
+        #[pallet::constant]
+        type CollateralPerMB: Get<BalanceOf<Self>>;
+        
+        /// Maximum collateral cap (e.g., 75000 DATA)
+        #[pallet::constant]
+        type MaxCollateral: Get<BalanceOf<Self>>;
+
         #[pallet::constant]
         type MaxNameLength: Get<u32>;
         
         #[pallet::constant]
         type MaxDescriptionLength: Get<u32>;
+
+        /// Maximum number of release phases for collateral
+        #[pallet::constant]
+        type MaxReleasePhases: Get<u32> + TypeInfo + 'static;
     }
+
+    /// Storage for asset collateral information
+    #[pallet::storage]
+    #[pallet::getter(fn asset_collateral)]
+    pub type AssetCollateral<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        [u8; 32], // asset_id
+        CollateralInfo<T::AccountId, BalanceOf<T>, BlockNumberFor<T>, T::MaxReleasePhases>,
+    >;
 
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
-        AssetRegistered { asset_id: [u8; 32], token_id: u32, owner: T::AccountId },
-        CertificateIssued { asset_id: [u8; 32], certificate_id: u32, holder: T::AccountId },
+        AssetRegistered { asset_id: [u8; 32], token_id: u32, owner: T::AccountId, collateral: BalanceOf<T> },
+        CertificateIssued { asset_id: [u8; 32], certificate_id: [u8; 32], issuer: T::AccountId, holder: T::AccountId },
         AssetTransferred { asset_id: [u8; 32], from: T::AccountId, to: T::AccountId },
-        CertificateRevoked { asset_id: [u8; 32], certificate_id: u32 },
+        CertificateRevoked { asset_id: [u8; 32], certificate_id: [u8; 32] },
         AssetRootUpdated { root: H256 },
+        /// Collateral locked for asset
+        CollateralLocked { asset_id: [u8; 32], depositor: T::AccountId, amount: BalanceOf<T> },
+        /// Collateral released (phase completed)
+        CollateralReleased { asset_id: [u8; 32], amount: BalanceOf<T>, phase: u8 },
+        /// Collateral slashed due to violation
+        CollateralSlashed { asset_id: [u8; 32], amount: BalanceOf<T>, percentage: u8 },
     }
 
     #[pallet::error]
@@ -77,10 +117,21 @@ pub mod pallet {
         NameTooLong,
         DescriptionTooLong,
         InvalidRightType,
+
+        InsufficientBalance,
+        CollateralNotFound,
+        InvalidSlashPercentage,
     }
 
     #[pallet::hooks]
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+        fn on_initialize(n: BlockNumberFor<T>) -> Weight {
+            // Process collateral releases
+            let release_weight = Self::process_collateral_releases(n);
+            
+            release_weight
+        }
+        
         fn on_finalize(_n: BlockNumberFor<T>) {
             //计算asset root
             let root = Self::compute_asset_root();
@@ -103,6 +154,7 @@ pub mod pallet {
             name: Vec<u8>,
             description: Vec<u8>,
             raw_data_hash: H256,
+            data_size_bytes: u64,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
             
@@ -117,10 +169,16 @@ pub mod pallet {
             
             let timestamp = Self::current_timestamp();
             let asset_id = DataAsset::generate_asset_id(&who, timestamp, &raw_data_hash);
+            // Check if asset already exists
+            ensure!(Self::get_asset(&asset_id).is_none(), Error::<T>::InvalidInput);
+            // Lock collateral BEFORE creating asset
+            Self::lock_collateral(&asset_id, &who, data_size_bytes)?;
+            // Get collateral amount for event
+            let collateral_amount = Self::calculate_collateral(data_size_bytes);
             let token_id = Self::get_and_increment_token_id();
             
             // 使用 minimal 构造函数
-            let mut asset = DataAsset::minimal(who.clone(), name, description, raw_data_hash, timestamp);
+            let mut asset = DataAsset::minimal(who.clone(), name, description, raw_data_hash, timestamp,);
             asset.asset_id = asset_id;
             asset.token_id = token_id;
             
@@ -128,7 +186,7 @@ pub mod pallet {
             Self::set_token_mapping(token_id, asset_id);
             Self::initialize_certificate_trie(&asset_id);
             
-            Self::deposit_event(Event::AssetRegistered { asset_id, token_id, owner: who });
+            Self::deposit_event(Event::AssetRegistered { asset_id, token_id, owner: who, collateral: collateral_amount });
             Ok(())
         }
 
@@ -154,17 +212,16 @@ pub mod pallet {
                 _ => return Err(Error::<T>::InvalidRightType.into()),
             };
             
-            let certificate_id = Self::get_next_certificate_id(&asset_id);
+            let token_id = Self::get_next_certificate_id(&asset_id);
             let current_time = Self::current_timestamp();
             
             // 使用 minimal 构造函数
             let mut certificate = RightToken::minimal(
-                certificate_id,
+                token_id,
                 right_type_enum,
                 holder.clone(),
                 asset.owner.clone(),
                 asset_id,
-                asset.token_id,
                 current_time,
                 valid_until
             );
@@ -173,7 +230,7 @@ pub mod pallet {
             Self::insert_certificate(&asset_id, &certificate)?;
             Self::update_asset_certificate_root(&asset_id)?;
             
-            Self::deposit_event(Event::CertificateIssued { asset_id, certificate_id, holder });
+            Self::deposit_event(Event::CertificateIssued { asset_id, certificate_id: certificate.certificate_id, issuer: asset.owner.clone(), holder });
             Ok(())
         }
 
@@ -187,14 +244,13 @@ pub mod pallet {
             let who = ensure_signed(origin)?;
             
             let mut asset = Self::get_asset(&asset_id).ok_or(Error::<T>::AssetNotFound)?;
-            ensure!(asset.owner == who, Error::<T>::NotOwner);
-            ensure!(!asset.is_locked(), Error::<T>::AssetLocked);
+            ensure!(asset.owner == who, Error::<T>::NotOwner); // 只有资产所有者才能转移资产
+            ensure!(!asset.is_locked(), Error::<T>::AssetLocked); // 锁定的资产不能转移
             
             let old_owner = asset.owner.clone();
             asset.owner = new_owner.clone();
             asset.nonce += 1;
             asset.transaction_count += 1;
-            asset.confirm_time = Self::current_timestamp();
             asset.updated_at = Self::current_timestamp();
             
             Self::insert_asset(&asset_id, &asset)?;
@@ -208,18 +264,17 @@ pub mod pallet {
         pub fn revoke_certificate(
             origin: OriginFor<T>,
             asset_id: [u8; 32],
-            certificate_id: u32,
+            certificate_id: [u8; 32],
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
-            // let caller = Self::account_to_h160(&who);
             
             let asset = Self::get_asset(&asset_id).ok_or(Error::<T>::AssetNotFound)?;
-            let cert = Self::get_certificate(&asset_id, certificate_id)
+            let cert = Self::get_certificate(&asset_id, &certificate_id)
                 .ok_or(Error::<T>::CertificateNotFound)?;
             
             ensure!(asset.owner == who || cert.owner == who, Error::<T>::NotOwner);
             
-            Self::remove_certificate(&asset_id, certificate_id)?;
+            Self::remove_certificate(&asset_id, &certificate_id)?;
             Self::update_asset_certificate_root(&asset_id)?;
             
             Self::deposit_event(Event::CertificateRevoked { asset_id, certificate_id });
@@ -259,6 +314,18 @@ pub mod pallet {
             Self::insert_asset(&asset_id, &asset)?;
             Ok(())
         }
+
+        /// 手动罚没部分抵押品（仅限 sudo/governance）
+        #[pallet::call_index(6)]
+        #[pallet::weight(10_000)]
+        pub fn slash_asset_collateral(origin: OriginFor<T>, asset_id: [u8; 32], slash_percentage: u8) -> DispatchResult {
+            // Only sudo can slash
+            ensure_root(origin)?;
+            
+            Self::slash_collateral(&asset_id, slash_percentage)?;
+            
+            Ok(())
+        }
     }
 
     impl<T: Config> Pallet<T> {
@@ -290,11 +357,12 @@ pub mod pallet {
             Self::get_asset(&asset_id)
         }
         
+        // 获取自增的 token_id，最大2^32-1(42亿)
         fn get_and_increment_token_id() -> u32 {
             let child_info = Self::asset_trie_info();
             let key = [METADATA_PREFIX, b"next_token_id"].concat();
             
-            let current = child::get::<u32>(&child_info, &key).unwrap_or(0);  // ← 添加类型注解
+            let current = child::get::<u32>(&child_info, &key).unwrap_or(0);
             let next = current.saturating_add(1);
             child::put(&child_info, &key, &next);
             current
@@ -314,7 +382,7 @@ pub mod pallet {
             key.extend_from_slice(b"token_mappings/");
             key.extend_from_slice(&token_id.to_le_bytes());
             
-            child::get::<[u8; 32]>(&child_info, &key)  // ← 添加类型注解
+            child::get::<[u8; 32]>(&child_info, &key)
         }
         
         fn certificate_trie_info(asset_id: &[u8; 32]) -> sp_core::storage::ChildInfo {
@@ -330,29 +398,26 @@ pub mod pallet {
         
         fn insert_certificate(asset_id: &[u8; 32], cert: &RightToken<T::AccountId>) -> DispatchResult {
             let child_info = Self::certificate_trie_info(asset_id);
-            let key = cert.certificate_id.to_le_bytes();
-            child::put(&child_info, &key, cert);
+            child::put(&child_info, &cert.certificate_id[..], cert);
             Ok(())
         }
         
-        pub fn get_certificate(asset_id: &[u8; 32], cert_id: u32) -> Option<RightToken<T::AccountId>> {
+        pub fn get_certificate(asset_id: &[u8; 32], cert_id: &[u8; 32]) -> Option<RightToken<T::AccountId>> {
             let child_info = Self::certificate_trie_info(asset_id);
-            let key = cert_id.to_le_bytes();
-            child::get::<RightToken<T::AccountId>>(&child_info, &key)  // ← 添加类型注解
+            child::get::<RightToken<T::AccountId>>(&child_info, cert_id)
         }
-        
-        fn remove_certificate(asset_id: &[u8; 32], cert_id: u32) -> DispatchResult {
+                
+        fn remove_certificate(asset_id: &[u8; 32], cert_id: &[u8; 32]) -> DispatchResult {
             let child_info = Self::certificate_trie_info(asset_id);
-            let key = cert_id.to_le_bytes();
-            child::kill(&child_info, &key);
+            child::kill(&child_info, cert_id);
             Ok(())
         }
         
         fn get_certificate_root(asset_id: &[u8; 32]) -> H256 {
             let child_info = Self::certificate_trie_info(asset_id);
-            // ← 修复：child::root 需要 StateVersion 参数
+            //child::root需要StateVersion参数
             let root_bytes = child::root(&child_info, sp_core::storage::StateVersion::V1);
-            H256::from_slice(&root_bytes)  // ← 正确转换
+            H256::from_slice(&root_bytes)
         }
         
         fn update_asset_certificate_root(asset_id: &[u8; 32]) -> DispatchResult {
@@ -364,28 +429,17 @@ pub mod pallet {
             Ok(())
         }
         
-        pub fn get_asset_certificates(asset_id: &[u8; 32]) -> Vec<RightToken<T::AccountId>> {
-            let mut certificates = Vec::new();
-            for i in 0u32..1000 {
-                if let Some(cert) = Self::get_certificate(asset_id, i) {
-                    certificates.push(cert);
-                }
-            }
-            certificates
-        }
-        
+        // 机制导致不能通过遍历child trie获取某资产下的所有证书
+        // pub fn get_asset_certificates(asset_id: &[u8; 32]) -> Vec<RightToken<T::AccountId>> {
+
         fn get_next_certificate_id(asset_id: &[u8; 32]) -> u32 {
             let child_info = Self::certificate_trie_info(asset_id);
-            let mut max_id = 0u32;
-            
-            for i in 0u32..1000 {
-                let key = i.to_le_bytes();
-                if child::get::<RightToken<T::AccountId>>(&child_info, &key).is_some() {  // ← 添加类型注解
-                    max_id = i;
-                }
-            }
-            
-            max_id.saturating_add(1)
+            let key = [METADATA_PREFIX, b"next_token_id"].concat();
+
+            let current = child::get::<u32>(&child_info, &key).unwrap_or(0);
+            let next = current.saturating_add(1);
+            child::put(&child_info, &key, &next);
+            current
         }
         
         pub fn compute_asset_root() -> H256 {
@@ -397,13 +451,6 @@ pub mod pallet {
         fn current_timestamp() -> u64 {
             <pallet_timestamp::Pallet<T>>::get().saturated_into::<u64>()
         }
-        
-        // fn account_to_h160(account: &T::AccountId) -> H160 {
-        //     let hash = blake2_256(&account.encode());
-        //     let mut addr = [0u8; 20];
-        //     addr.copy_from_slice(&hash[..20]);
-        //     H160::from(addr)
-        // }
     }
 
     impl<T: Config> Pallet<T> {

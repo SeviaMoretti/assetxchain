@@ -34,20 +34,16 @@ use frame_support::{
 };
 use frame_system::limits::{BlockLength, BlockWeights};
 use pallet_transaction_payment::{ConstFeeMultiplier, FungibleAdapter, Multiplier};
-// use sp_consensus_aura::sr25519::AuthorityId as AuraId;
-use sp_consensus_babe::{AuthorityId as BabeId};
 use sp_runtime::traits::OpaqueKeys;
-use frame_support::traits::{FindAuthor, KeyOwnerProofSystem};
 use sp_runtime::{traits::One, Perbill};
 use sp_version::RuntimeVersion;
-use pallet_session::ShouldEndSession;
 
 // Local module imports
 use super::{
 	AccountId, Balance, Balances, Block, BlockNumber, Hash, Nonce, PalletInfo, Runtime,
 	RuntimeCall, RuntimeEvent, RuntimeFreezeReason, RuntimeHoldReason, RuntimeOrigin, RuntimeTask,
 	System, EXISTENTIAL_DEPOSIT, SLOT_DURATION, VERSION, DAYS, HOURS, MILLI_SECS_PER_BLOCK,
-	Babe, SessionKeys, Session,
+	Babe, SessionKeys,
 };
 
 const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(75);
@@ -147,19 +143,6 @@ impl pallet_session::Config for Runtime {
 	type DisablingStrategy = ();
 }
 
-// pub struct FindAuthorTruncated;
-// impl FindAuthor<AccountId> for FindAuthorTruncated {	
-//     fn find_author<'a, I>(digests: I) -> Option<AccountId>
-//     where
-//         I: 'a + IntoIterator<Item = (sp_runtime::ConsensusEngineId, &'a [u8])>,
-//     {
-//         pallet_babe::Pallet::<Runtime>::find_author(digests)
-//             .and_then(|k| 
-//                 AccountId::try_from(k.as_ref()).ok()
-//             )
-//     }
-// }
-
 impl pallet_authorship::Config for Runtime {
     type FindAuthor = pallet_session::FindAccountFromAuthorIndex<Self, Babe>;
     type EventHandler = (); // 之后添加区块奖励处理
@@ -238,8 +221,36 @@ impl pallet_template::Config for Runtime {
 	type WeightInfo = pallet_template::weights::SubstrateWeight<Runtime>;
 }
 
+parameter_types! {
+    /// Base collateral amount: 2000 DATA
+    /// This is the minimum collateral required for any asset
+    pub const BaseCollateral: Balance = 2_000 * UNIT;
+    
+    /// Collateral per MB: 100 DATA/MB
+    /// Additional collateral based on data size
+    pub const CollateralPerMB: Balance = 100 * UNIT;
+    
+    /// Maximum collateral cap: 75000 DATA
+    /// Upper limit to prevent excessive collateral requirements
+    pub const MaxCollateral: Balance = 75_000 * UNIT;
+    /// Maximum number of release phases for collateral
+    pub const MaxReleasePhases: u32 = 5;
+}
+
 impl pallet_dataassets::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
+    
+    /// Use Balances pallet for collateral management
+    type Currency = Balances;
+    
+    /// Collateral configuration
+    type BaseCollateral = BaseCollateral;
+    type CollateralPerMB = CollateralPerMB;
+    type MaxCollateral = MaxCollateral;
+    /// Maximum number of release phases for collateral
+    type MaxReleasePhases = MaxReleasePhases;
+    
+    /// Asset metadata constraints
     type MaxNameLength = ConstU32<256>;
     type MaxDescriptionLength = ConstU32<1024>;
 }

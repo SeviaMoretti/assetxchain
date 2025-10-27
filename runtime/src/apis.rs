@@ -338,13 +338,13 @@ impl_runtime_apis! {
 			pallet_data_assets::Pallet::<Runtime>::get_asset_by_token_id(token_id)
 		}
 		
-		fn get_certificate(asset_id: [u8; 32], cert_id: u32) -> Option<pallet_data_assets::types::RightToken<AccountId>> {
-			pallet_data_assets::Pallet::<Runtime>::get_certificate(&asset_id, cert_id)
+		fn get_certificate(asset_id: [u8; 32], cert_id: [u8; 32]) -> Option<pallet_data_assets::types::RightToken<AccountId>> {
+			pallet_data_assets::Pallet::<Runtime>::get_certificate(&asset_id, &cert_id)
 		}
 		
-		fn get_asset_certificates(asset_id: [u8; 32]) -> Vec<pallet_data_assets::types::RightToken<AccountId>> {
-			pallet_data_assets::Pallet::<Runtime>::get_asset_certificates(&asset_id)
-		}
+		// fn get_asset_certificates(asset_id: [u8; 32]) -> Vec<pallet_data_assets::types::RightToken<AccountId>> {
+		// 	pallet_data_assets::Pallet::<Runtime>::get_asset_certificates(&asset_id)
+		// }
 		
 		fn get_asset_root() -> H256 {
 			pallet_data_assets::Pallet::<Runtime>::compute_asset_root()

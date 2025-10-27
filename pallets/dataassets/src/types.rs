@@ -1,9 +1,9 @@
 extern crate alloc;
-use alloc::format;
-use codec::{Encode, Decode};
+use codec::{Encode, Decode, MaxEncodedLen};
 use sp_std::vec::Vec;
-use sp_core::{H256, H160};
+use sp_core::{H256};
 use scale_info::TypeInfo;
+use frame_support::{BoundedVec, traits::Get};
 
 // Protocol version constants
 pub const ASSET_PROTOCOL_VERSION: &str = "1.0";
@@ -39,11 +39,10 @@ pub struct DataAsset<AccountId> {
     
     // IPFS storage info
     pub metadata_cid: Vec<u8>,
-    pub data_cid_merkle_nodes: Vec<MerkleNode>,
+    // pub data_cid_merkle_nodes: Vec<MerkleNode>, // 之后用
     
     // Timestamps and signature
     pub timestamp: u64,
-    pub confirm_time: u64,
     pub signature: Vec<u8>,
     
     // Transaction and state info
@@ -58,8 +57,7 @@ pub struct DataAsset<AccountId> {
     
     // Statistics
     pub view_count: u64,
-    pub download_count: u64,
-    pub transaction_count: u64,
+    pub transaction_count: u64, // 多余了，已经有nonce了
     pub total_revenue: u128,
     
     // Pricing configuration
@@ -78,20 +76,20 @@ pub struct RightToken<AccountId> {
     // Protocol version
     pub version: Vec<u8>,
     
-    // Token ID format: parent_token_id|certificate_id
-    pub token_id: Vec<u8>,
-    
     // Unique certificate identifier
-    pub certificate_id: u32,
+    pub certificate_id: [u8; 32],
+
+    // Token ID format: parent_token_id|certificate_id
+    pub token_id: u32,
     
     // Right type
     pub right_type: RightType,
     
     // Time information
     pub create_time: u64,
-    pub confirm_time: u64,
-    pub valid_from: u64,
-    pub valid_until: Option<u64>,
+    // 权证是一次性的，过了限制条件就没了
+    pub valid_from: u64, // 生效时间
+    pub valid_until: Option<u64>, // 过期时间，None表示永不过期
     
     // Ownership
     pub owner: AccountId,
@@ -102,16 +100,85 @@ pub struct RightToken<AccountId> {
     
     // Parent asset reference
     pub parent_asset_id: [u8; 32],
-    pub parent_asset_token_id: u32,
     
     // Certificate status
     pub status: CertificateStatus,
     
-    // Traceability
-    pub right_token_from: Option<Vec<u8>>,
-    
     // Signature
     pub signature: Vec<u8>,
+}
+
+/// Collateral Information for Asset
+#[derive(Encode, Decode, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen)]
+pub struct CollateralInfo<AccountId, Balance, BlockNumber, MaxPhases: Get<u32>> {
+    /// The account that deposited the collateral
+    pub depositor: AccountId,
+    
+    /// Total collateral amount required
+    pub total_amount: Balance,
+    
+    /// Amount still reserved/locked
+    pub reserved_amount: Balance,
+    
+    /// Amount that has been released
+    pub released_amount: Balance,
+    
+    /// Release schedule with phases
+    pub release_schedule: BoundedVec<ReleasePhase<Balance, BlockNumber>, MaxPhases>,
+    
+    /// Current status of the collateral
+    pub status: CollateralStatus<Balance>,
+}
+
+/// Release Phase for Collateral
+#[derive(Encode, Decode, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen)]
+pub struct ReleasePhase<Balance, BlockNumber> {
+    /// Percentage of total collateral (50%, 30%, 20%)
+    pub percentage: u8,
+    
+    /// Actual amount to be released in this phase
+    pub amount: Balance,
+    
+    /// Block number when this phase can be unlocked
+    pub unlock_block: BlockNumber,
+    
+    /// Condition that must be met for release
+    pub condition: ReleaseCondition,
+    
+    /// Whether this phase has been released
+    pub is_released: bool,
+}
+
+/// Conditions for Releasing Collateral
+#[derive(Encode, Decode, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen)]
+pub enum ReleaseCondition {
+    /// Only time requirement (no additional conditions)
+    TimeOnly,
+    
+    /// Time + data verification passed
+    TimeAndVerification,
+    
+    /// Time + at least one certificate usage
+    TimeAndUsage,
+    
+    /// Time + IPFS data continuously available
+    TimeAndAvailability,
+}
+
+/// Collateral Status
+#[derive(Encode, Decode, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen)]
+pub enum CollateralStatus<Balance> {
+    /// All collateral is locked
+    FullyLocked,
+    
+    /// Some collateral has been released
+    PartiallyReleased,
+    
+    /// All collateral has been released
+    FullyReleased,
+    
+    /// Collateral was slashed (contains slashed amount)
+    Slashed(Balance),
 }
 
 /// Encryption Information
@@ -152,11 +219,21 @@ pub enum CertificateStatus {
     Expired = 2,
 }
 
+#[derive(Encode, Decode, Clone, PartialEq, Eq, Debug, TypeInfo)]
+pub enum PriceType {
+    Fixed, // 固定价格
+    Negotiable, // 协商价格
+}
+
 /// Pricing Configuration
 #[derive(Encode, Decode, Clone, PartialEq, Eq, Debug, TypeInfo)]
 pub struct PricingConfig {
-    pub base_price: u128,
+    pub price_type: PriceType,
     pub currency: Vec<u8>,
+
+    pub base_price: u128, // 元证价格
+    pub usage_price: u128, // 使用权价格（权证）
+    pub access_price: u128, // 访问权价格（权证）
 }
 
 // Default implementations
@@ -176,16 +253,14 @@ impl<AccountId: Default> Default for DataAsset<AccountId> {
             raw_data_hash: H256::zero(),
             owner: AccountId::default(),
             metadata_cid: Vec::new(),
-            data_cid_merkle_nodes: Vec::new(),
+            // data_cid_merkle_nodes: Vec::new(),
             timestamp: 0,
-            confirm_time: 0,
             signature: Vec::new(),
             nonce: 0,
             is_locked: false,
             encryption_info: EncryptionInfo::default(),
             children_root: [0u8; 32],
             view_count: 0,
-            download_count: 0,
             transaction_count: 0,
             total_revenue: 0,
             pricing_config: PricingConfig::default(),
@@ -199,20 +274,17 @@ impl<AccountId: Default> Default for RightToken<AccountId> {
     fn default() -> Self {
         Self {
             version: RIGHT_TOKEN_PROTOCOL_VERSION.as_bytes().to_vec(),
-            token_id: Vec::new(),
-            certificate_id: 0,
+            token_id: 0,
+            certificate_id: [0u8; 32],
             right_type: RightType::Usage,
             create_time: 0,
-            confirm_time: 0,
             valid_from: 0,
             valid_until: None,
             owner: AccountId::default(),
             issuer: AccountId::default(),
             nonce: 0,
             parent_asset_id: [0u8; 32],
-            parent_asset_token_id: 0,
             status: CertificateStatus::Active,
-            right_token_from: None,
             signature: Vec::new(),
         }
     }
@@ -232,8 +304,11 @@ impl Default for EncryptionInfo {
 impl Default for PricingConfig {
     fn default() -> Self {
         Self {
-            base_price: 0,
+            price_type: PriceType::Fixed,
             currency: b"NATIVE".to_vec(),
+            base_price: 0,
+            usage_price: 0,
+            access_price: 0,
         }
     }
 }
@@ -266,11 +341,20 @@ impl<AccountId: Clone> DataAsset<AccountId> {
     }
 }
 
-impl<AccountId> RightToken<AccountId> {
-    /// Generate token ID from parent token ID and certificate sequence
-    pub fn generate_token_id(parent_token_id: u32, certificate_sequence: u32) -> Vec<u8> {
-        let token_str = format!("{}|{}", parent_token_id, certificate_sequence);
-        token_str.into_bytes()
+impl<AccountId: Clone> RightToken<AccountId> {
+    /// Generate unique certificate ID
+    pub fn generate_certificate_id(parent_asset_id: &[u8; 32], timestamp: u64, issuer: &AccountId) -> [u8; 32] 
+    where 
+        AccountId: Encode,
+    {
+        use sp_io::hashing::blake2_256;
+        
+        let mut input = Vec::new();
+        input.extend_from_slice(parent_asset_id);
+        input.extend_from_slice(&timestamp.to_le_bytes());
+        input.extend_from_slice(&issuer.encode());
+        
+        blake2_256(&input)
     }
     
     /// Check if certificate is valid at current time
@@ -321,11 +405,10 @@ impl<AccountId: Clone + Encode> DataAsset<AccountId> {
             
             // IPFS storage
             metadata_cid: Vec::new(),
-            data_cid_merkle_nodes: Vec::new(),
+            // data_cid_merkle_nodes: Vec::new(),
             
             // Timestamps
             timestamp,
-            confirm_time: timestamp,
             signature: Vec::new(),
             
             // Transaction state
@@ -345,13 +428,15 @@ impl<AccountId: Clone + Encode> DataAsset<AccountId> {
             
             // Statistics
             view_count: 0,
-            download_count: 0,
             transaction_count: 0,
             total_revenue: 0,
             
             // Pricing
             pricing_config: PricingConfig {
+                price_type: PriceType::Fixed,
                 base_price: 0,
+                usage_price: 0,
+                access_price: 0,
                 currency: b"NATIVE".to_vec(),
             },
             
@@ -362,19 +447,18 @@ impl<AccountId: Clone + Encode> DataAsset<AccountId> {
     }
 }
 
-impl<AccountId: Clone> RightToken<AccountId> {
+impl<AccountId: Clone + Encode> RightToken<AccountId> {
     /// Create a minimal RightToken with only required fields
     pub fn minimal(
-        certificate_id: u32,
+        token_id: u32,
         right_type: RightType,
         holder: AccountId,
         issuer: AccountId,
         parent_asset_id: [u8; 32],
-        parent_asset_token_id: u32,
         current_time: u64,
         valid_until: Option<u64>
     ) -> Self {
-        let token_id = Self::generate_token_id(parent_asset_token_id, certificate_id);
+        let certificate_id = Self::generate_certificate_id(&parent_asset_id, current_time, &issuer);
         
         Self {
             // Protocol version
@@ -391,7 +475,6 @@ impl<AccountId: Clone> RightToken<AccountId> {
             
             // Time info
             create_time: current_time,
-            confirm_time: current_time,
             valid_from: current_time,
             valid_until,
             
@@ -404,13 +487,9 @@ impl<AccountId: Clone> RightToken<AccountId> {
             
             // Parent asset reference
             parent_asset_id,
-            parent_asset_token_id,
             
             // Status
             status: CertificateStatus::Active,
-            
-            // Traceability
-            right_token_from: None,
             
             // Signature
             signature: Vec::new(),

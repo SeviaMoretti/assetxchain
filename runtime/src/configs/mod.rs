@@ -45,6 +45,7 @@ use super::{
 	System, EXISTENTIAL_DEPOSIT, SLOT_DURATION, VERSION, DAYS, HOURS, MILLI_SECS_PER_BLOCK,
 	Babe, SessionKeys,
 };
+use crate::UNIT;
 
 const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(75);
 
@@ -233,8 +234,9 @@ parameter_types! {
     /// Maximum collateral cap: 75000 DATA
     /// Upper limit to prevent excessive collateral requirements
     pub const MaxCollateral: Balance = 75_000 * UNIT;
-    /// Maximum number of release phases for collateral
-    pub const MaxReleasePhases: u32 = 5;
+
+	/// Maximum number of release phases for collateral
+	pub const MaxReleasePhases: u32 = 5;
 }
 
 impl pallet_dataassets::Config for Runtime {
@@ -247,8 +249,6 @@ impl pallet_dataassets::Config for Runtime {
     type BaseCollateral = BaseCollateral;
     type CollateralPerMB = CollateralPerMB;
     type MaxCollateral = MaxCollateral;
-    /// Maximum number of release phases for collateral
-    type MaxReleasePhases = MaxReleasePhases;
     
     /// Asset metadata constraints
     type MaxNameLength = ConstU32<256>;

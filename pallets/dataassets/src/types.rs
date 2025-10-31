@@ -3,7 +3,7 @@ use codec::{Encode, Decode, MaxEncodedLen};
 use sp_std::vec::Vec;
 use sp_core::{H256};
 use scale_info::TypeInfo;
-use frame_support::{BoundedVec, traits::Get};
+use frame_support::{BoundedVec, traits::Get, traits::ConstU32};
 
 // Protocol version constants
 pub const ASSET_PROTOCOL_VERSION: &str = "1.0";
@@ -110,7 +110,7 @@ pub struct RightToken<AccountId> {
 
 /// Collateral Information for Asset
 #[derive(Encode, Decode, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen)]
-pub struct CollateralInfo<AccountId, Balance, BlockNumber, MaxPhases: Get<u32>> {
+pub struct CollateralInfo<AccountId, Balance, BlockNumber> {
     /// The account that deposited the collateral
     pub depositor: AccountId,
     
@@ -124,7 +124,7 @@ pub struct CollateralInfo<AccountId, Balance, BlockNumber, MaxPhases: Get<u32>> 
     pub released_amount: Balance,
     
     /// Release schedule with phases
-    pub release_schedule: BoundedVec<ReleasePhase<Balance, BlockNumber>, MaxPhases>,
+    pub release_schedule: BoundedVec<ReleasePhase<BlockNumber, Balance>, ConstU32<5>>,
     
     /// Current status of the collateral
     pub status: CollateralStatus<Balance>,
@@ -132,7 +132,7 @@ pub struct CollateralInfo<AccountId, Balance, BlockNumber, MaxPhases: Get<u32>> 
 
 /// Release Phase for Collateral
 #[derive(Encode, Decode, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen)]
-pub struct ReleasePhase<Balance, BlockNumber> {
+pub struct ReleasePhase<BlockNumber, Balance> {
     /// Percentage of total collateral (50%, 30%, 20%)
     pub percentage: u8,
     

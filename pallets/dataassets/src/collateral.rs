@@ -10,7 +10,7 @@
 use super::*;
 use frame_support::{
     BoundedVec,
-    traits::{Currency, ReservableCurrency, Get},
+    traits::{Currency, ReservableCurrency, Get, ConstU32},
     ensure,
     pallet_prelude::DispatchResult,
 };
@@ -18,6 +18,7 @@ use frame_system::pallet_prelude::BlockNumberFor;
 use sp_runtime::traits::{Zero, Saturating, SaturatedConversion, CheckedDiv};
 use frame_support::weights::Weight;
 use crate::types::*;
+use alloc::vec;
 
 /// Type alias for Balance
 pub type BalanceOf<T> = <<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
@@ -32,8 +33,8 @@ impl<T: Config> Pallet<T> {
     /// * `data_size_bytes` - Size of data in bytes
     /// 
     /// # Returns
-    /// * Calculated collateral amount (capped at MaxCollateral)
-    pub fn calculate_collateral(data_size_bytes: u64) -> BalanceOf<T> {
+    /// * Calculated collateral amount (capped at MaxCollateral), capped flag
+    pub fn calculate_collateral(data_size_bytes: u64) -> (BalanceOf<T>, bool) {
         // Convert bytes to MB (minimum 1 MB)
         let data_size_mb = ((data_size_bytes as u128) / (1024 * 1024)).max(1);
         
@@ -42,11 +43,16 @@ impl<T: Config> Pallet<T> {
             .saturating_mul(data_size_mb.saturated_into());
             
         // Total collateral = base + variable
-        let total = T::BaseCollateral::get()
+        let total_uncapped = T::BaseCollateral::get()
             .saturating_add(variable_collateral);
         
-        // Apply maximum cap
-        total.min(T::MaxCollateral::get())
+        let max_collateral = T::MaxCollateral::get();
+        // 最终结果：取base+variable与MaxCollateral的较小值
+        let total_capped = total_uncapped.min(max_collateral);
+        // 是否超过MaxCollateral
+        let is_over_capped = total_uncapped > max_collateral;
+
+        (total_capped, is_over_capped)
     }
     
     /// Create a phased release schedule for collateral
@@ -61,31 +67,36 @@ impl<T: Config> Pallet<T> {
     pub fn create_release_schedule(
         total_amount: BalanceOf<T>,
         start_block: BlockNumberFor<T>,
-    ) -> BoundedVec<ReleasePhase<BalanceOf<T>, BlockNumberFor<T>>, T::MaxReleasePhases> {
+    ) -> BoundedVec<ReleasePhase<BlockNumberFor<T>, BalanceOf<T>>, ConstU32<5>> {
         use sp_runtime::traits::CheckedDiv;
         
         // Calculate phase amounts
         let hundred: BalanceOf<T> = 100u32.into();
-        
+        let base_release_amount = total_amount
+            // 计算：total_amount × 40%（先乘40，再除以100）
+            .saturating_mul(40u32.into())  // 避免乘法溢出
+            .checked_div(&hundred)         // 除法（处理除零，返回None时用0）
+            .unwrap_or_else(Zero::zero);   // 除零或错误时返回0
         // Phase 1: 50%
-        let phase1_amount = total_amount
+        let phase1_amount = base_release_amount
             .saturating_mul(50u32.into())
             .checked_div(&hundred)
             .unwrap_or_else(Zero::zero);
         
         // Phase 2: 30%
-        let phase2_amount = total_amount
+        let phase2_amount = base_release_amount
             .saturating_mul(30u32.into())
             .checked_div(&hundred)
             .unwrap_or_else(Zero::zero);
         
         // Phase 3: Remainder (handles rounding)
-        let phase3_amount = total_amount
+        let phase3_amount = base_release_amount
             .saturating_sub(phase1_amount)
             .saturating_sub(phase2_amount);
         
         let phases_vec = vec![
             // Phase 1: 50% after 24 hours (with verification)
+            // 注意：泛型参数顺序是 <BlockNumber, Balance>
             ReleasePhase {
                 percentage: 50,
                 amount: phase1_amount,
@@ -123,12 +134,9 @@ impl<T: Config> Pallet<T> {
     pub fn lock_collateral(
         asset_id: &[u8; 32],
         who: &T::AccountId,
-        data_size_bytes: u64,
-    ) -> DispatchResult {
-        // Calculate required collateral
-        let collateral_amount = Self::calculate_collateral(data_size_bytes);
-        
-        // Reserve (lock) the collateral
+        collateral_amount: BalanceOf<T>,
+    ) -> DispatchResult { 
+        // 从who的余额中扣除collateral_amount，如果余额不足则提示错误
         T::Currency::reserve(who, collateral_amount)
             .map_err(|_| Error::<T>::InsufficientBalance)?;
         
@@ -224,7 +232,7 @@ impl<T: Config> Pallet<T> {
                 weight = weight.saturating_add(T::DbWeight::get().writes(1));
             }
             
-            // Safety limit: don't process too many in one block
+            // 限制100个操作防止区块过载，应该根据实际权重调整
             if releases_processed >= 100 {
                 break;
             }
@@ -249,8 +257,8 @@ impl<T: Config> Pallet<T> {
                 // For now, we assume verification is automatic after 24h
                 // In production, this should check actual verification status
                 if let Some(_asset) = Self::get_asset(asset_id) {
-                    // TODO: Implement actual verification check
-                    // For now, return true to allow release
+                    // TODO: 实际应检查验证状态
+                    // 当前默认通过
                     true
                 } else {
                     false
@@ -270,7 +278,7 @@ impl<T: Config> Pallet<T> {
                 // This should be verified by off-chain workers
                 // For now, we assume availability if asset exists
                 if let Some(_asset) = Self::get_asset(asset_id) {
-                    // TODO: Implement actual IPFS availability check
+                    // TODO: 应该检查 IPFS 数据是否可访问
                     // This will require off-chain worker integration
                     true
                 } else {
@@ -345,7 +353,7 @@ impl<T: Config> Pallet<T> {
     }
     
     /// Get collateral info for an asset
-    pub fn get_collateral_info(asset_id: &[u8; 32]) -> Option<CollateralInfo<T::AccountId, BalanceOf<T>, BlockNumberFor<T>, T::MaxReleasePhases>> {
+    pub fn get_collateral_info(asset_id: &[u8; 32]) -> Option<CollateralInfo<T::AccountId, BalanceOf<T>, BlockNumberFor<T>>> {
         AssetCollateral::<T>::get(asset_id)
     }
 }

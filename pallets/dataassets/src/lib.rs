@@ -38,7 +38,7 @@ pub mod pallet {
     use frame_system::pallet_prelude::*;
     use sp_core::H256;
     use frame_support::storage::child;
-    use sp_runtime::traits::SaturatedConversion;
+    use sp_runtime::traits::{SaturatedConversion, Saturating};
     use frame_support::traits::{Currency, ReservableCurrency};
     
     use crate::types::*;
@@ -74,10 +74,6 @@ pub mod pallet {
         
         #[pallet::constant]
         type MaxDescriptionLength: Get<u32>;
-
-        /// Maximum number of release phases for collateral
-        #[pallet::constant]
-        type MaxReleasePhases: Get<u32> + TypeInfo + 'static;
     }
 
     /// Storage for asset collateral information
@@ -87,7 +83,7 @@ pub mod pallet {
         _,
         Blake2_128Concat,
         [u8; 32], // asset_id
-        CollateralInfo<T::AccountId, BalanceOf<T>, BlockNumberFor<T>, T::MaxReleasePhases>,
+        CollateralInfo<T::AccountId, BalanceOf<T>, BlockNumberFor<T>>,
     >;
 
     #[pallet::event]
@@ -104,6 +100,8 @@ pub mod pallet {
         CollateralReleased { asset_id: [u8; 32], amount: BalanceOf<T>, phase: u8 },
         /// Collateral slashed due to violation
         CollateralSlashed { asset_id: [u8; 32], amount: BalanceOf<T>, percentage: u8 },
+        CollateralOverCappedHint {
+            asset_id: [u8; 32], depositor: T::AccountId, total_uncapped: BalanceOf<T>, capped_amount: BalanceOf<T>, max_collateral: BalanceOf<T> },
     }
 
     #[pallet::error]
@@ -154,7 +152,7 @@ pub mod pallet {
             name: Vec<u8>,
             description: Vec<u8>,
             raw_data_hash: H256,
-            data_size_bytes: u64,
+            data_size_bytes: u64, // 应该该有cid、encryptioninfo等信息
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
             
@@ -171,10 +169,29 @@ pub mod pallet {
             let asset_id = DataAsset::generate_asset_id(&who, timestamp, &raw_data_hash);
             // Check if asset already exists
             ensure!(Self::get_asset(&asset_id).is_none(), Error::<T>::InvalidInput);
-            // Lock collateral BEFORE creating asset
-            Self::lock_collateral(&asset_id, &who, data_size_bytes)?;
             // Get collateral amount for event
-            let collateral_amount = Self::calculate_collateral(data_size_bytes);
+            let (collateral_amount, is_over_capped) = Self::calculate_collateral(data_size_bytes);
+            if is_over_capped {
+                // 获取上限值，用于事件中展示“原计算值vs上限值”
+                let max_collateral = T::MaxCollateral::get();
+                // 重新计算“未封顶的原始金额”（用于提示用户“原本需要多少，实际锁定多少”）
+                let data_size_mb = ((data_size_bytes as u128) / (1024 * 1024)).max(1);
+                let variable_collateral = T::CollateralPerMB::get()
+                    .saturating_mul(data_size_mb.saturated_into());
+                let total_uncapped = T::BaseCollateral::get()
+                    .saturating_add(variable_collateral);
+                
+                // 发射超限提示事件（需在 Event 枚举中新增该事件）
+                Self::deposit_event(Event::CollateralOverCappedHint {
+                    asset_id,
+                    depositor: who.clone(),
+                    total_uncapped,    // 未封顶的原始计算值（如102000DAT）
+                    capped_amount: collateral_amount, // 封顶后的实际锁定值（如50000DAT）
+                    max_collateral,    // 质押金上限（如50000DAT）
+                });
+            }
+            // Lock collateral BEFORE creating asset
+            Self::lock_collateral(&asset_id, &who, collateral_amount)?;
             let token_id = Self::get_and_increment_token_id();
             
             // 使用 minimal 构造函数

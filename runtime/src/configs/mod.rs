@@ -26,12 +26,13 @@
 // Substrate and Polkadot dependencies
 use frame_support::{
 	derive_impl, parameter_types,
-	traits::{ConstU128, ConstU32, ConstU64, ConstU8, VariantCountOf},
+	traits::{ConstU128, ConstU32, ConstU64, ConstU8, VariantCountOf, WithdrawReasons, Get},
 	weights::{
 		constants::{RocksDbWeight, WEIGHT_REF_TIME_PER_SECOND},
 		IdentityFee, Weight,
 	},
 };
+use frame_system::pallet::Pallet as SystemPallet;
 use frame_system::limits::{BlockLength, BlockWeights};
 use pallet_transaction_payment::{ConstFeeMultiplier, FungibleAdapter, Multiplier};
 use sp_runtime::traits::OpaqueKeys;
@@ -43,7 +44,7 @@ use super::{
 	AccountId, Balance, Balances, Block, BlockNumber, Hash, Nonce, PalletInfo, Runtime,
 	RuntimeCall, RuntimeEvent, RuntimeFreezeReason, RuntimeHoldReason, RuntimeOrigin, RuntimeTask,
 	System, EXISTENTIAL_DEPOSIT, SLOT_DURATION, VERSION, DAYS, HOURS, MILLI_SECS_PER_BLOCK,
-	Babe, SessionKeys,
+	Babe, SessionKeys, Vesting,
 };
 use crate::UNIT;
 
@@ -178,14 +179,14 @@ impl pallet_timestamp::Config for Runtime {
 }
 
 impl pallet_balances::Config for Runtime {
-	type MaxLocks = ConstU32<50>;
-	type MaxReserves = ();
-	type ReserveIdentifier = [u8; 8];
+	type MaxLocks = ConstU32<50>; // 支持质押时的锁仓数量
+	type MaxReserves = (); // 支持多池储备，目前未启用
+	type ReserveIdentifier = [u8; 8]; // 区分不同的储备池的标识符（例如："DATA"）
 	/// The type for recording an account's balance.
 	type Balance = Balance;
 	/// The ubiquitous event type.
 	type RuntimeEvent = RuntimeEvent;
-	type DustRemoval = ();
+	type DustRemoval = (); // 粉尘清理，关闭
 	type ExistentialDeposit = ConstU128<EXISTENTIAL_DEPOSIT>;
 	type AccountStore = System;
 	type WeightInfo = pallet_balances::weights::SubstrateWeight<Runtime>;
@@ -254,6 +255,32 @@ impl pallet_dataassets::Config for Runtime {
     type MaxNameLength = ConstU32<256>;
     type MaxDescriptionLength = ConstU32<1024>;
 }
+
+// 添加参数配置
+parameter_types! {
+    // 5年线性释放 (按区块计算: 5年 * 365天 * 24小时 * 60分钟 * 60秒 / 18秒每区块)
+    pub const FoundationVestingPeriod: BlockNumber = 5 * 365 * 24 * 60 * 60 / (MILLI_SECS_PER_BLOCK / 1000) as BlockNumber;
+    pub const MinVestedTransfer: Balance = 1 * UNIT;
+	pub const MaxVestingSchedules: u32 = 20;
+	pub const AllowedWithdrawReasons: WithdrawReasons = WithdrawReasons::from_bits(
+		WithdrawReasons::TRANSFER.bits() | WithdrawReasons::TRANSACTION_PAYMENT.bits()
+	).expect("Valid bits");
+}
+
+// 实现vesting配置
+impl pallet_vesting::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type Currency = Balances;
+    type BlockNumberToBalance = sp_runtime::traits::ConvertInto;
+    type MinVestedTransfer = MinVestedTransfer;
+    type WeightInfo = pallet_vesting::weights::SubstrateWeight<Runtime>;
+    // 使用预定义的常量代替直接在类型参数中计算
+    type UnvestedFundsAllowedWithdrawReasons = AllowedWithdrawReasons;
+    type BlockNumberProvider = SystemPallet<Runtime>;
+    // 之前修复的 MAX_VESTING_SCHEDULES 常量
+    const MAX_VESTING_SCHEDULES: u32 = MaxVestingSchedules::get();
+}
+
 
 impl crate::custom_header::AssetsStateRootProvider<sp_runtime::traits::BlakeTwo256> for Runtime {
     fn compute_assets_state_root() -> sp_core::H256 {

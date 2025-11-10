@@ -33,6 +33,7 @@ pallet-sudo.workspace = true
 pallet-template.workspace = true
 pallet-dataassets.workspace = true
 pallet-timestamp.workspace = true
+pallet-vesting.workspace = true
 pallet-transaction-payment-rpc-runtime-api.workspace = true
 pallet-transaction-payment.workspace = true
 scale-info = { features = ["derive", "serde"], workspace = true }
@@ -53,6 +54,7 @@ sp-transaction-pool.workspace = true
 sp-version = { features = ["serde"], workspace = true }
 serde = { features = ["alloc", "derive",], optional = true, workspace = true}
 log = { workspace = true }
+hex-literal = { workspace = true }
 
 [build-dependencies]
 substrate-wasm-builder = { optional = true, workspace = true, default-features = true }
@@ -86,6 +88,7 @@ std = [
 	"pallet-template/std",
 	"pallet-dataassets/std",
 	"pallet-timestamp/std",
+	"pallet-vesting/std",
 	"pallet-transaction-payment-rpc-runtime-api/std",
 	"pallet-transaction-payment/std",
 	"scale-info/std",
@@ -119,6 +122,7 @@ runtime-benchmarks = [
 	"pallet-template/runtime-benchmarks",
 	"pallet-dataassets/runtime-benchmarks",
 	"pallet-timestamp/runtime-benchmarks",
+	"pallet-vesting/runtime-benchmarks",
 	"pallet-transaction-payment/runtime-benchmarks",
 	"sp-runtime/runtime-benchmarks",
 ]
@@ -135,6 +139,7 @@ try-runtime = [
 	"pallet-template/try-runtime",
 	"pallet-dataassets/try-runtime",
 	"pallet-timestamp/try-runtime",
+	"pallet-vesting/try-runtime",
 	"pallet-transaction-payment/try-runtime",
 	"sp-runtime/try-runtime",
 ]

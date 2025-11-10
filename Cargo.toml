@@ -71,6 +71,7 @@ pallet-balances = { version = "41.1.0", default-features = false }
 pallet-grandpa = { version = "40.0.0", default-features = false }
 pallet-sudo = { version = "40.0.0", default-features = false }
 pallet-timestamp = { version = "39.0.0", default-features = false }
+pallet-vesting = { version = "40.1.0", default-features = false }
 pallet-transaction-payment-rpc-runtime-api = { version = "40.0.0", default-features = false }
 scale-info = { version = "2.11.6", default-features = false }
 serde_json = { version = "1.0.132", default-features = false }
@@ -93,6 +94,7 @@ kvdb-rocksdb = {version = "0.19.0"}
 kvdb-memorydb = {version = "0.13.0"}
 reference-trie = {version = "0.29.1"}
 sp-std = {version = "14.0.0", default-features = false }
+hex-literal = { version = "1.1.0" }
 
 [profile.release]
 opt-level = 3

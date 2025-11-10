@@ -23,6 +23,7 @@ use sp_version::RuntimeVersion;
 pub use frame_system::Call as SystemCall;
 pub use pallet_balances::Call as BalancesCall;
 pub use pallet_timestamp::Call as TimestampCall;
+pub use pallet_vesting::Call as VestingCall;
 #[cfg(any(feature = "std", test))]
 pub use sp_runtime::BuildStorage;
 
@@ -102,13 +103,23 @@ pub const DAYS: BlockNumber = HOURS * 24;
 
 pub const BLOCK_HASH_COUNT: BlockNumber = 2400;
 
-// Unit = the base number of indivisible units for balances
+// Unit = the base number of indivisible units for balances 1DAT = UNIT个最小单位
 pub const UNIT: Balance = 1_000_000_000_000; // 10^12
 pub const MILLI_UNIT: Balance = 1_000_000_000;
 pub const MICRO_UNIT: Balance = 1_000_000;
 
 /// Existential deposit.
 pub const EXISTENTIAL_DEPOSIT: Balance = MILLI_UNIT;
+
+// 代币相关常量
+pub const TOTAL_SUPPLY: Balance = 1_000_000_000 * UNIT; // 10亿总量
+pub const FOUNDATION_PERCENT: Balance = 200_000_000 * UNIT; // 20% 基金会储备
+pub const INCENTIVE_POOL_PERCENT: Balance = 300_000_000 * UNIT; // 30% 激励池
+pub const MINING_REWARD_PERCENT: Balance = 500_000_000 * UNIT; // 50% 挖矿奖励
+// 挖矿参数
+pub const INITIAL_BLOCK_REWARD: Balance = 5 * UNIT; // 初始每区块5枚
+pub const HALVING_THRESHOLD: Balance = 2_500_000_000 * UNIT; // 挖完2.5亿后减半
+pub const REDUCED_BLOCK_REWARD: Balance = 1 * UNIT; // 减半后每区块1枚
 
 /// The version information used to identify this runtime when compiled natively.
 #[cfg(feature = "std")]
@@ -184,7 +195,7 @@ pub type Executive = frame_executive::Executive<
 	frame_system::ChainContext<Runtime>,
 	Runtime,
 	AllPalletsWithSystem,
-	Migrations,
+	Migrations,  
 >;
 
 // Create the runtime by composing the FRAME pallets that were previously configured.
@@ -239,4 +250,7 @@ mod runtime {
 
 	#[runtime::pallet_index(10)]
     pub type DataAssets = pallet_dataassets;
+
+	#[runtime::pallet_index(11)]
+	pub type Vesting = pallet_vesting;
 }

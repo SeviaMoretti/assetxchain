@@ -15,7 +15,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{AccountId, BalancesConfig, RuntimeGenesisConfig, SudoConfig, SessionKeys};
+use crate::{AccountId, BalancesConfig, RuntimeGenesisConfig, SudoConfig, SessionKeys,
+	FOUNDATION_PERCENT, INCENTIVE_POOL_PERCENT, MINING_REWARD_PERCENT,
+};
+use crate::configs::FoundationVestingPeriod;
 use alloc::{vec, vec::Vec};
 use frame_support::build_struct_json_patch;
 use serde_json::Value;
@@ -23,9 +26,23 @@ use sp_consensus_babe::AuthorityId as BabeId;
 use sp_consensus_grandpa::AuthorityId as GrandpaId;
 use sp_genesis_builder::{self, PresetId};
 use sp_keyring::Sr25519Keyring;
+use sp_core::crypto::UncheckedFrom;
+use sp_runtime::AccountId32;
+use hex_literal::hex;
 
 fn session_keys(babe: BabeId, grandpa: GrandpaId) -> SessionKeys {
     SessionKeys { babe, grandpa }
+}
+
+// 预设账户，公钥应该使用线下生成，确保安全
+fn foundation_account() -> AccountId {
+    // 基金会账户 (可以使用固定公钥)
+    AccountId32::unchecked_from(sp_core::H256(hex!("0000000000000000000000000000000000000000000000000000000000000001"))).into()
+}
+
+fn incentive_pool_account() -> AccountId {
+    // 激励池账户
+    AccountId32::unchecked_from(sp_core::H256(hex!("0000000000000000000000000000000000000000000000000000000000000002"))).into()
 }
 
 // Returns the genesis config presets populated with given parameters.
@@ -34,12 +51,32 @@ fn testnet_genesis(
 	endowed_accounts: Vec<AccountId>,
 	root: AccountId,
 ) -> Value {
+	// 合并初始账户和预分配账户
+    let mut all_endowed = endowed_accounts.clone();
+    let foundation = foundation_account();
+    let incentive_pool = incentive_pool_account();
+    
+    if !all_endowed.contains(&foundation) {
+        all_endowed.push(foundation.clone());
+    }
+    if !all_endowed.contains(&incentive_pool) {
+        all_endowed.push(incentive_pool.clone());
+    }
+
 	build_struct_json_patch!(RuntimeGenesisConfig {
 		balances: BalancesConfig {
-			balances: endowed_accounts
+			balances: all_endowed
 				.iter()
 				.cloned()
-				.map(|k| (k, 1u128 << 60))
+				.map(|k| {
+					if k == foundation {
+						(k, FOUNDATION_PERCENT)
+					} else if k == incentive_pool {
+						(k, INCENTIVE_POOL_PERCENT)
+					} else {
+						(k, 1u128 << 60)
+					}
+				})
 				.collect::<Vec<_>>(),
 		},
 		babe: pallet_babe::GenesisConfig {
@@ -70,6 +107,44 @@ fn testnet_genesis(
                 .collect::<Vec<_>>(),
         },
 		sudo: SudoConfig { key: Some(root) },
+		vesting: pallet_vesting::GenesisConfig {
+			vesting: vec![
+				(
+					foundation_account(),
+					0,                                    // 从区块0开始
+					FoundationVestingPeriod::get() / 5,          // 持续1年
+					FOUNDATION_PERCENT * 20 / 100,        // 第一年释放20%
+				),
+				// 第二年释放 20%  
+				(
+					foundation_account(),
+					FoundationVestingPeriod::get() / 5,          // 从第1年开始
+					FoundationVestingPeriod::get() / 5,          // 持续1年
+					FOUNDATION_PERCENT * 20 / 100,        // 第二年释放20%
+				),
+				// 第三年释放 20%
+				(
+					foundation_account(),
+					FoundationVestingPeriod::get() * 2 / 5,      // 从第2年开始
+					FoundationVestingPeriod::get() / 5,          // 持续1年
+					FOUNDATION_PERCENT * 20 / 100,        // 第三年释放20%
+				),
+				// 第四年释放 20%
+				(
+					foundation_account(),
+					FoundationVestingPeriod::get() * 3 / 5,      // 从第3年开始
+					FoundationVestingPeriod::get() / 5,          // 持续1年
+					FOUNDATION_PERCENT * 20 / 100,        // 第四年释放20%
+				),
+				// 第五年释放 20%
+				(
+					foundation_account(),
+					FoundationVestingPeriod::get() * 4 / 5,      // 从第4年开始
+					FoundationVestingPeriod::get() / 5,          // 持续1年
+					FOUNDATION_PERCENT * 20 / 100,        // 第五年释放20%
+				),
+			],
+		},
 	})
 }
 

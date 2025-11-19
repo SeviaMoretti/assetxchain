@@ -129,6 +129,11 @@ pub mod pallet {
     #[pallet::getter(fn incentive_pool_used)]
     pub type IncentivePoolUsed<T: Config> = StorageValue<_, BalanceOf<T>, ValueQuery>;
 
+    /// 激励池已锁定总额（未释放部分）
+    #[pallet::storage]
+    #[pallet::getter(fn incentive_pool_reserved)]
+    pub type IncentivePoolReserved<T: Config> = StorageValue<_, BalanceOf<T>, ValueQuery>;
+
     /// 记录账户是否首次创建元证（防止重复发放奖励）
     #[pallet::storage]
     #[pallet::getter(fn has_first_create_reward)]
@@ -264,18 +269,14 @@ pub mod pallet {
     // -------------------------- Hooks（周期性任务） --------------------------
     #[pallet::hooks]
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
-        /// 区块初始化时执行：1. 激励池动态释放(实际上是全部额度（3亿                                          ）都能被使用)；2. 月度奖励发放
+        /// 区块初始化时执行：1. 激励池动态释放；2. 月度奖励发放
         fn on_initialize(current_block: BlockNumberFor<T>) -> Weight {
             let mut weight = Weight::zero();
             
-            // 1. 激励池动态释放，按月释放的话，应该将1%平坦到每一次出块，而不是每次出块都释放1%
-            // weight = weight.saturating_add(Self::dynamic_release_incentive_pool());
-            
-            // 2. 月度奖励发放
+            // 月度奖励发放
             let last_block = Self::last_monthly_reward_block();
             if current_block.saturating_sub(last_block) >= MONTH_BLOCKS.into() {
                 weight = weight.saturating_add(Self::dynamic_release_incentive_pool());
-                
                 weight = weight.saturating_add(Self::distribute_monthly_rewards());
                 LastMonthlyRewardBlock::<T>::put(current_block);
             }
@@ -283,7 +284,8 @@ pub mod pallet {
             weight
         }
 
-        /// 链启动时初始化辅助存储
+        /// 链启动时初始化辅助存储 、激励池初始化！！！！！！！！！！！！！
+        /// 创世块（区块0）的构建过程中，on_runtime_upgrade钩子是不会被调用的。on_runtime_upgrade只会在链上升级时调用
         fn on_runtime_upgrade() -> Weight {
             if StorageVersion::get::<Self>() < STORAGE_VERSION {
                 let pool_account = incentive_pool_account::<T>();
@@ -296,11 +298,17 @@ pub mod pallet {
                 
                 // 执行首次释放（链启动时立即释放1%）
                 let initial_release = T::DynamicReleaseRatio::get() * expected_balance;
+                let locked_amount = expected_balance.saturating_sub(initial_release);
+                
+                // 使用 reserve 机制锁定未释放部分（与质押模块相同）
+                if let Err(e) = T::Currency::reserve(&pool_account, locked_amount) {
+                    log::error!("激励池资金锁定失败: {:?}", e);
+                    // 继续执行，但记录错误
+                }
+                
                 IncentivePoolReleased::<T>::put(initial_release);
-
                 IncentivePoolUsed::<T>::put(BalanceOf::<T>::zero());
-
-                IncentivePoolReleased::<T>::put(initial_release);
+                IncentivePoolReserved::<T>::put(locked_amount);
                 LastMonthlyRewardBlock::<T>::put(BlockNumberFor::<T>::zero());
                 StorageVersion::new(1).put::<Self>();
                 
@@ -314,7 +322,7 @@ pub mod pallet {
                     pool_account: pool_account.clone(),
                 });
                 
-                T::DbWeight::get().writes(3)
+                T::DbWeight::get().writes(4)
             } else {
                 Weight::zero()
             }
@@ -389,11 +397,48 @@ pub mod pallet {
 
 // -------------------------- 核心逻辑实现 --------------------------
 impl<T: Config> Pallet<T> {
+    /// 获取激励池可用余额（已释放 - 已使用）
+    fn get_available_balance() -> BalanceOf<T> {
+        let released = Self::incentive_pool_released();
+        let used = Self::incentive_pool_used();
+        released.saturating_sub(used)
+    }
+
+    /// 内部转账函数，处理从激励池转账并更新已使用金额
+    fn transfer_from_incentive_pool(
+        recipient: &T::AccountId, 
+        amount: BalanceOf<T>
+    ) -> DispatchResult {
+        let pool_account = incentive_pool_account::<T>();
+        
+        // 检查可用余额
+        let available = Self::get_available_balance();
+        ensure!(available >= amount, Error::<T>::InsufficientIncentivePoolBalance);
+        
+        // 检查实际余额
+        let actual_balance = <T as Config>::Currency::free_balance(&pool_account);
+        ensure!(actual_balance >= amount, Error::<T>::InsufficientIncentivePoolBalance);
+
+        // 执行转账
+        <T as Config>::Currency::transfer(
+            &pool_account,
+            recipient,
+            amount,
+            ExistenceRequirement::AllowDeath,
+        )?;
+
+        // 更新已使用金额
+        IncentivePoolUsed::<T>::mutate(|used| *used = used.saturating_add(amount));
+
+        Ok(())
+    }
+
     /// 1. 激励池动态释放（从创世配置的账户余额中释放）
     fn dynamic_release_incentive_pool() -> Weight {
         let pool_account = incentive_pool_account::<T>();
         let total_initial = T::InitialIncentivePool::get();
         let released = Self::incentive_pool_released();
+        let reserved = Self::incentive_pool_reserved();
         let remaining = total_initial.saturating_sub(released);
         
         if remaining.is_zero() {
@@ -406,13 +451,24 @@ impl<T: Config> Pallet<T> {
             return Weight::zero();
         }
 
-        let actual_balance = <T as Config>::Currency::free_balance(&pool_account);
-        if actual_balance < release_amount {
+        // 释放部分锁定资金 - 返回实际释放的金额
+        let actual_released = T::Currency::unreserve(&pool_account, release_amount);
+        
+        // 检查是否成功释放了足够的金额
+        if actual_released < release_amount {
+            log::error!(
+                "激励池资金释放失败: 期望释放 {:?}，实际释放 {:?}", 
+                release_amount, 
+                actual_released
+            );
             return Weight::zero();
         }
 
         let new_released = released.saturating_add(release_amount);
+        let new_reserved = reserved.saturating_sub(release_amount);
+        
         IncentivePoolReleased::<T>::put(new_released);
+        IncentivePoolReserved::<T>::put(new_reserved);
 
         Self::deposit_event(Event::IncentivePoolReleased {
             amount: release_amount,
@@ -420,7 +476,7 @@ impl<T: Config> Pallet<T> {
             pool_account: pool_account.clone(),
         });
 
-        T::DbWeight::get().writes(1)
+        T::DbWeight::get().writes(2)
     }
 
     /// 2. 月度奖励统一发放（优质市场、交易者返还、治理投票奖励）
@@ -440,7 +496,6 @@ impl<T: Config> Pallet<T> {
         let mut weight = Weight::zero();
         let reward_per_market = T::TopMarketMonthlyReward::get();
         let pool_account = incentive_pool_account::<T>();
-        let pool_balance = <T as Config>::Currency::free_balance(&pool_account);
 
         // 收集所有市场
         let mut markets: Vec<([u8; 32], BalanceOf<T>)> = MarketMonthlyVolume::<T>::iter().collect();
@@ -468,10 +523,12 @@ impl<T: Config> Pallet<T> {
             return Weight::zero();
         };
 
-        if pool_balance < total_required {
+        // 检查可用余额
+        let available = Self::get_available_balance();
+        if available < total_required {
             Self::deposit_event(Event::IncentivePoolInsufficientBalance {
                 required: total_required,
-                available: pool_balance,
+                available,
                 pool_account: pool_account.clone(),
             });
             return Weight::zero();
@@ -479,17 +536,12 @@ impl<T: Config> Pallet<T> {
 
         // 给每个优质市场发放奖励
         for (market_id, _volume) in top_markets {
-            // TODO: 需要从市场模块获取真实的运营者账户
-            // 这里简化处理，使用市场ID作为账户（实际项目中需要修改）
+            // ################: 需要从市场模块获取真实的运营者账户
+            // 这里################3使用市场ID作为账户（实际项目中需要修改）
             let operator = T::AccountId::decode(&mut &market_id[..])
                 .unwrap_or_else(|_| incentive_pool_account::<T>());
 
-            if let Err(e) = <T as Config>::Currency::transfer(
-                &pool_account,
-                &operator,
-                reward_per_market,
-                ExistenceRequirement::AllowDeath,
-            ) {
+            if let Err(e) = Self::transfer_from_incentive_pool(&operator, reward_per_market) {
                 log::error!("优质市场奖励转账失败：market_id={:?}, error={:?}", market_id, e);
                 continue;
             }
@@ -513,7 +565,6 @@ impl<T: Config> Pallet<T> {
         let threshold = T::TraderRebateThreshold::get();
         let rebate_ratio = T::TraderRebateRatio::get();
         let pool_account = incentive_pool_account::<T>();
-        let pool_balance = <T as Config>::Currency::free_balance(&pool_account);
 
         for (trader, monthly_volume) in TraderMonthlyVolume::<T>::iter() {
             if monthly_volume < threshold {
@@ -525,21 +576,18 @@ impl<T: Config> Pallet<T> {
                 continue;
             }
 
-            if pool_balance < rebate_amount {
+            // 检查可用余额
+            let available = Self::get_available_balance();
+            if available < rebate_amount {
                 Self::deposit_event(Event::IncentivePoolInsufficientBalance {
                     required: rebate_amount,
-                    available: pool_balance,
+                    available,
                     pool_account: pool_account.clone(),
                 });
                 break;
             }
 
-            if let Err(e) = <T as Config>::Currency::transfer(
-                &pool_account,
-                &trader,
-                rebate_amount,
-                ExistenceRequirement::AllowDeath,
-            ) {
+            if let Err(e) = Self::transfer_from_incentive_pool(&trader, rebate_amount) {
                 log::error!("交易者手续费返还转账失败：trader={:?}, error={:?}", trader, e);
                 continue;
             }
@@ -562,12 +610,13 @@ impl<T: Config> Pallet<T> {
         let mut weight = Weight::zero();
         let total_reward = T::GovernanceVotingRewardTotal::get();
         let pool_account = incentive_pool_account::<T>();
-        let pool_balance = <T as Config>::Currency::free_balance(&pool_account);
 
-        if pool_balance < total_reward {
+        // 检查可用余额
+        let available = Self::get_available_balance();
+        if available < total_reward {
             Self::deposit_event(Event::IncentivePoolInsufficientBalance {
                 required: total_reward,
-                available: pool_balance,
+                available,
                 pool_account: pool_account.clone(),
             });
             return Weight::zero();
@@ -594,12 +643,7 @@ impl<T: Config> Pallet<T> {
                 continue;
             }
 
-            if let Err(e) = <T as Config>::Currency::transfer(
-                &pool_account,
-                &voter,
-                reward_amount,
-                ExistenceRequirement::AllowDeath,
-            ) {
+            if let Err(e) = Self::transfer_from_incentive_pool(&voter, reward_amount) {
                 log::error!("治理投票奖励转账失败：voter={:?}, error={:?}", voter, e);
                 continue;
             }
@@ -631,20 +675,13 @@ impl<T: Config> Pallet<T> {
         ensure!(!Self::has_first_create_reward(recipient), Error::<T>::FirstCreateRewardAlreadyClaimed);
         
         let reward_amount = T::FirstCreateReward::get();
-        let pool_account = incentive_pool_account::<T>();
-        let pool_balance = <T as Config>::Currency::free_balance(&pool_account);
         
-        ensure!(pool_balance >= reward_amount, Error::<T>::InsufficientIncentivePoolBalance);
-
-        <T as Config>::Currency::transfer(
-            &pool_account,
-            recipient,
-            reward_amount,
-            ExistenceRequirement::AllowDeath,
-        )?;
+        // 使用内部转账函数，会自动检查可用余额并更新已使用金额
+        Self::transfer_from_incentive_pool(recipient, reward_amount)?;
 
         HasFirstCreateReward::<T>::insert(recipient, true);
 
+        let pool_account = incentive_pool_account::<T>();
         Self::deposit_event(Event::FirstCreateRewardDistributed {
             recipient: recipient.clone(),
             amount: reward_amount,
@@ -663,18 +700,11 @@ impl<T: Config> Pallet<T> {
         ensure!(trade_count >= threshold, Error::<T>::QualityDataConditionNotMet);
         
         let reward_amount = T::QualityDataReward::get();
-        let pool_account = incentive_pool_account::<T>();
-        let pool_balance = <T as Config>::Currency::free_balance(&pool_account);
         
-        ensure!(pool_balance >= reward_amount, Error::<T>::InsufficientIncentivePoolBalance);
+        // 使用内部转账函数
+        Self::transfer_from_incentive_pool(recipient, reward_amount)?;
 
-        <T as Config>::Currency::transfer(
-            &pool_account,
-            recipient,
-            reward_amount,
-            ExistenceRequirement::AllowDeath,
-        )?;
-
+        let pool_account = incentive_pool_account::<T>();
         Self::deposit_event(Event::QualityDataRewardDistributed {
             recipient: recipient.clone(),
             amount: reward_amount,
@@ -693,17 +723,10 @@ impl<T: Config> Pallet<T> {
             return Ok(());
         }
 
+        // 使用内部转账函数
+        Self::transfer_from_incentive_pool(recipient, reward_amount)?;
+
         let pool_account = incentive_pool_account::<T>();
-        let pool_balance = <T as Config>::Currency::free_balance(&pool_account);
-        ensure!(pool_balance >= reward_amount, Error::<T>::InsufficientIncentivePoolBalance);
-
-        <T as Config>::Currency::transfer(
-            &pool_account,
-            recipient,
-            reward_amount,
-            ExistenceRequirement::AllowDeath,
-        )?;
-
         Self::deposit_event(Event::LiquidityRewardDistributed {
             recipient: recipient.clone(),
             amount: reward_amount,
@@ -717,18 +740,11 @@ impl<T: Config> Pallet<T> {
     /// 6. 治理参与者：提案通过奖励（供治理模块调用）
     pub fn distribute_proposal_reward(recipient: &T::AccountId) -> DispatchResult {
         let reward_amount = T::GovernanceProposalReward::get();
-        let pool_account = incentive_pool_account::<T>();
-        let pool_balance = <T as Config>::Currency::free_balance(&pool_account);
         
-        ensure!(pool_balance >= reward_amount, Error::<T>::InsufficientIncentivePoolBalance);
+        // 使用内部转账函数
+        Self::transfer_from_incentive_pool(recipient, reward_amount)?;
 
-        <T as Config>::Currency::transfer(
-            &pool_account,
-            recipient,
-            reward_amount,
-            ExistenceRequirement::AllowDeath,
-        )?;
-
+        let pool_account = incentive_pool_account::<T>();
         Self::deposit_event(Event::GovernanceProposalRewardDistributed {
             recipient: recipient.clone(),
             amount: reward_amount,

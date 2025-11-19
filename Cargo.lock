@@ -6067,6 +6067,7 @@ dependencies = [
  "frame-system",
  "log",
  "pallet-balances",
+ "pallet-shared-traits",
  "pallet-timestamp",
  "parity-scale-codec",
  "scale-info",
@@ -6100,6 +6101,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "pallet-incentive"
+version = "0.1.0"
+dependencies = [
+ "frame-benchmarking",
+ "frame-support",
+ "frame-system",
+ "hex-literal 1.1.0",
+ "log",
+ "pallet-shared-traits",
+ "pallet-timestamp",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-core 36.1.0",
+ "sp-io",
+ "sp-runtime",
+ "sp-std",
+]
+
+[[package]]
+name = "pallet-rewards"
+version = "0.1.0"
+dependencies = [
+ "frame-benchmarking",
+ "frame-support",
+ "frame-system",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-core 36.1.0",
+ "sp-io",
+ "sp-runtime",
+]
+
+[[package]]
 name = "pallet-session"
 version = "40.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6119,6 +6153,17 @@ dependencies = [
  "sp-staking",
  "sp-state-machine",
  "sp-trie 39.1.0",
+]
+
+[[package]]
+name = "pallet-shared-traits"
+version = "0.1.0"
+dependencies = [
+ "frame-support",
+ "parity-scale-codec",
+ "sp-core 36.1.0",
+ "sp-runtime",
+ "sp-std",
 ]
 
 [[package]]
@@ -10050,7 +10095,10 @@ dependencies = [
  "pallet-balances",
  "pallet-dataassets",
  "pallet-grandpa",
+ "pallet-incentive",
+ "pallet-rewards",
  "pallet-session",
+ "pallet-shared-traits",
  "pallet-sudo",
  "pallet-template",
  "pallet-timestamp",

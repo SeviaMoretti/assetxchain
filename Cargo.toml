@@ -10,6 +10,9 @@ members = [
     "node",
     "pallets/template",
     "pallets/dataassets",
+    "pallets/rewards",
+    "pallets/incentive",
+    "pallets/shared_traits",
     "runtime",
 ]
 resolver = "2"
@@ -18,6 +21,9 @@ resolver = "2"
 solochain-template-runtime = { path = "./runtime", default-features = false }
 pallet-template = { path = "./pallets/template", default-features = false }
 pallet-dataassets = { path = "./pallets/dataassets", default-features = false }
+pallet-rewards = { path = "./pallets/rewards", default-features = false }
+pallet-incentive = { path = "./pallets/incentive", default-features = false }
+pallet-shared-traits = { path = "./pallets/shared_traits", default-features = false }
 clap = { version = "4.5.13" }
 frame-benchmarking-cli = { version = "47.0.0", default-features = false }
 frame-metadata-hash-extension = { version = "0.8.0", default-features = false }

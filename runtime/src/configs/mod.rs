@@ -39,14 +39,16 @@ use sp_runtime::traits::OpaqueKeys;
 use sp_runtime::{traits::One, Perbill};
 use sp_version::RuntimeVersion;
 
+use pallet_shared_traits::{IncentiveHandler, DataAssetProvider};
+
 // Local module imports
 use super::{
 	AccountId, Balance, Balances, Block, BlockNumber, Hash, Nonce, PalletInfo, Runtime,
 	RuntimeCall, RuntimeEvent, RuntimeFreezeReason, RuntimeHoldReason, RuntimeOrigin, RuntimeTask,
 	System, EXISTENTIAL_DEPOSIT, SLOT_DURATION, VERSION, DAYS, HOURS, MILLI_SECS_PER_BLOCK,
-	Babe, SessionKeys, Vesting,
+	Babe, SessionKeys, Vesting, DataAssets,
 };
-use crate::UNIT;
+use crate::{Incentive, UNIT};
 
 const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(75);
 
@@ -254,6 +256,8 @@ impl pallet_dataassets::Config for Runtime {
     /// Asset metadata constraints
     type MaxNameLength = ConstU32<256>;
     type MaxDescriptionLength = ConstU32<1024>;
+
+    type IncentiveHandler = Incentive;
 }
 
 // 添加参数配置
@@ -281,6 +285,87 @@ impl pallet_vesting::Config for Runtime {
     const MAX_VESTING_SCHEDULES: u32 = MaxVestingSchedules::get();
 }
 
+parameter_types! {
+	pub const InitialReward: Balance = 5 * UNIT;
+    pub const RewardAdjustmentThreshold: Balance = 250_000_000 * UNIT;
+    pub const AdjustedReward: Balance = 1 * UNIT; 
+}
+
+pub struct BlockAuthor;
+impl Get<AccountId> for BlockAuthor {
+    fn get() -> AccountId {
+        pallet_authorship::Pallet::<Runtime>::author()
+			.unwrap_or_else(|| AccountId::from([0u8; 32]))
+    }
+}
+
+impl pallet_rewards::Config for Runtime {
+	type RuntimeEvent = RuntimeEvent;
+	type Currency = Balances;
+	type RewardReceiver = BlockAuthor;
+	type InitialReward = InitialReward;
+	type RewardAdjustmentThreshold = RewardAdjustmentThreshold;
+	type AdjustedReward = AdjustedReward;
+}
+
+parameter_types! {
+    // 激励池初始余额：3亿 DAT (经济模型的30%)
+    pub const InitialIncentivePool: Balance = 300_000_000 * UNIT;
+    
+    // 动态释放比例：1%/月
+    pub const DynamicReleaseRatio: Perbill = Perbill::from_percent(1);
+    
+    // 数据创建者奖励参数
+    pub const FirstCreateReward: Balance = 1_000 * UNIT; // 1000 DAT
+    pub const QualityDataReward: Balance = 3_000 * UNIT; // 3000 DAT
+    pub const LongTermShareRatio: Perbill = Perbill::from_perthousand(5); // 0.5%
+    pub const QualityDataTradeThreshold: u32 = 10; // 10笔交易
+    
+    // 市场运营者奖励参数
+    pub const TopMarketMonthlyReward: Balance = 50_000 * UNIT; // 5万 DAT
+    
+    // 交易者奖励参数
+    pub const TraderRebateThreshold: Balance = 100_000 * UNIT; // 10万 DAT
+    pub const TraderRebateRatio: Perbill = Perbill::from_percent(10); // 10%
+    pub const LiquidityRewardRatio: Perbill = Perbill::from_perthousand(5); // 0.5‰
+    
+    // 治理参与者奖励参数
+    pub const GovernanceVotingRewardTotal: Balance = 5_000 * UNIT; // 5000 DAT
+    pub const GovernanceProposalReward: Balance = 2_000 * UNIT; // 2000 DAT
+    
+    // 验证节点奖励参数
+    pub const ValidatorVerificationReward: Balance = 50 * UNIT; // 50 DAT
+}
+
+impl pallet_incentive::Config for Runtime {
+	type RuntimeEvent = RuntimeEvent;
+	type Currency = Balances;
+	type DataAssetProvider = DataAssets;
+	// 激励池配置
+    type InitialIncentivePool = InitialIncentivePool;
+    type DynamicReleaseRatio = DynamicReleaseRatio;
+    
+    // 数据创建者奖励配置
+    type FirstCreateReward = FirstCreateReward;
+    type QualityDataReward = QualityDataReward;
+    type LongTermShareRatio = LongTermShareRatio;
+    type QualityDataTradeThreshold = QualityDataTradeThreshold;
+    
+    // 市场运营者奖励配置
+    type TopMarketMonthlyReward = TopMarketMonthlyReward;
+    
+    // 交易者奖励配置
+    type TraderRebateThreshold = TraderRebateThreshold;
+    type TraderRebateRatio = TraderRebateRatio;
+    type LiquidityRewardRatio = LiquidityRewardRatio;
+    
+    // 治理参与者奖励配置
+    type GovernanceVotingRewardTotal = GovernanceVotingRewardTotal;
+    type GovernanceProposalReward = GovernanceProposalReward;
+    
+    // 验证节点奖励配置
+    type ValidatorVerificationReward = ValidatorVerificationReward;
+}
 
 impl crate::custom_header::AssetsStateRootProvider<sp_runtime::traits::BlakeTwo256> for Runtime {
     fn compute_assets_state_root() -> sp_core::H256 {

@@ -15,8 +15,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{AccountId, BalancesConfig, RuntimeGenesisConfig, SudoConfig, SessionKeys,
-	FOUNDATION_PERCENT, INCENTIVE_POOL_PERCENT, MINING_REWARD_PERCENT,
+use crate::{AccountId, BalancesConfig, FOUNDATION_PERCENT, INCENTIVE_POOL_PERCENT, MINING_REWARD_PERCENT, RuntimeGenesisConfig, SessionKeys, SudoConfig, UNIT
 };
 use crate::configs::FoundationVestingPeriod;
 use alloc::{vec, vec::Vec};
@@ -37,12 +36,12 @@ fn session_keys(babe: BabeId, grandpa: GrandpaId) -> SessionKeys {
 // 预设账户，公钥应该使用线下生成，确保安全
 fn foundation_account() -> AccountId {
     // 基金会账户 (可以使用固定公钥)
-    AccountId32::unchecked_from(sp_core::H256(hex!("0000000000000000000000000000000000000000000000000000000000000001"))).into()
+    AccountId32::unchecked_from(sp_core::H256(hex!("701f9c89ca77bc72933cd3c1d29b18cc9fc3a95bb4b9f137373e9ebf9239b34f"))).into()
 }
 
 fn incentive_pool_account() -> AccountId {
     // 激励池账户
-    AccountId32::unchecked_from(sp_core::H256(hex!("0000000000000000000000000000000000000000000000000000000000000002"))).into()
+    AccountId32::unchecked_from(sp_core::H256(hex!("1a9de66d5ca5a6a7bad9add630d85b972f351082b0422e5f64c78a4eecc4a427"))).into()
 }
 
 // Returns the genesis config presets populated with given parameters.
@@ -74,7 +73,7 @@ fn testnet_genesis(
 					} else if k == incentive_pool {
 						(k, INCENTIVE_POOL_PERCENT)
 					} else {
-						(k, 1u128 << 60)
+						(k, 1000 * UNIT)
 					}
 				})
 				.collect::<Vec<_>>(),

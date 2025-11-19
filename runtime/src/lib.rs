@@ -253,4 +253,10 @@ mod runtime {
 
 	#[runtime::pallet_index(11)]
 	pub type Vesting = pallet_vesting;
+
+	#[runtime::pallet_index(12)]
+    pub type Rewards = pallet_rewards;
+
+	#[runtime::pallet_index(13)]
+    pub type Incentive = pallet_incentive;
 }

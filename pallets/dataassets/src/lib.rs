@@ -10,6 +10,8 @@
 //! 
 //! All data is stored in Child Tries, completely independent from the main state_root.
 
+
+// 元证首次创建奖励+，元证交易数量-
 #![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
@@ -40,7 +42,8 @@ pub mod pallet {
     use frame_support::storage::child;
     use sp_runtime::traits::{SaturatedConversion, Saturating};
     use frame_support::traits::{Currency, ReservableCurrency};
-    
+    use pallet_shared_traits::IncentiveHandler;
+
     use crate::types::*;
 
     const ASSET_TRIE_ID: &[u8] = b":asset_trie:";
@@ -74,6 +77,9 @@ pub mod pallet {
         
         #[pallet::constant]
         type MaxDescriptionLength: Get<u32>;
+
+        /// Incentive handler trait
+        type IncentiveHandler: IncentiveHandler<Self::AccountId, [u8; 32], BalanceOf<Self>>;
     }
 
     /// Storage for asset collateral information
@@ -203,6 +209,11 @@ pub mod pallet {
             Self::set_token_mapping(token_id, asset_id);
             Self::initialize_certificate_trie(&asset_id);
             
+            // 首次创建奖励发放(捕捉错误，不阻断业务)
+            if let Err(_) = T::IncentiveHandler::distribute_first_create_reward(&who, &asset_id) {
+                log::error!("首次创建奖励发放失败：asset_id={:?}", asset_id);
+            }
+
             Self::deposit_event(Event::AssetRegistered { asset_id, token_id, owner: who, collateral: collateral_amount });
             Ok(())
         }
@@ -368,6 +379,19 @@ pub mod pallet {
             let key = Self::make_asset_key(asset_id);
             child::get::<DataAsset<T::AccountId>>(&child_info, &key)
         }
+
+        pub fn account_exists(account: &T::AccountId) -> bool {
+            // 方法1：检查是否有余额
+            T::Currency::free_balance(account) > BalanceOf::<T>::zero() ||
+            // 方法2：检查系统账户存储
+            frame_system::Pallet::<T>::account_exists(account)
+        }
+
+        pub fn is_zero_account(account: &T::AccountId) -> bool {
+            // 方法1：检查编码后是否全为零
+            let encoded = account.encode();
+            encoded.iter().all(|&b| b == 0)
+        }
         
         pub fn get_asset_by_token_id(token_id: u32) -> Option<DataAsset<T::AccountId>> {
             let asset_id = Self::get_token_mapping(token_id)?;
@@ -481,5 +505,23 @@ pub mod pallet {
             let digest = frame_system::Pallet::<T>::digest();
             Self::get_asset_root_from_digest(&digest)
         }
+    }
+}
+
+impl<T: Config> pallet_shared_traits::DataAssetProvider<T::AccountId, [u8; 32]> for Pallet<T> {
+    fn get_asset_owner(asset_id: &[u8; 32]) -> Result<T::AccountId, pallet_shared_traits::AssetQueryError> {
+        let asset = Self::get_asset(asset_id)
+            .ok_or(pallet_shared_traits::AssetQueryError::AssetNotFound)?;
+        
+        if Self::is_zero_account(&asset.owner) {
+            return Err(pallet_shared_traits::AssetQueryError::InvalidOwner);
+        }
+        
+        // 可选：检查账户存在性
+        if !Self::account_exists(&asset.owner) {
+            return Err(pallet_shared_traits::AssetQueryError::OwnerAccountDoesNotExist);
+        }
+        
+        Ok(asset.owner)
     }
 }

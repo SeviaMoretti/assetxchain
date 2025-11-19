@@ -32,6 +32,9 @@ pallet-grandpa.workspace = true
 pallet-sudo.workspace = true
 pallet-template.workspace = true
 pallet-dataassets.workspace = true
+pallet-rewards.workspace = true
+pallet-incentive.workspace = true
+pallet-shared-traits.workspace = true
 pallet-timestamp.workspace = true
 pallet-vesting.workspace = true
 pallet-transaction-payment-rpc-runtime-api.workspace = true
@@ -87,6 +90,9 @@ std = [
 	"pallet-sudo/std",
 	"pallet-template/std",
 	"pallet-dataassets/std",
+	"pallet-rewards/std",
+	"pallet-incentive/std",
+	"pallet-shared-traits/std",
 	"pallet-timestamp/std",
 	"pallet-vesting/std",
 	"pallet-transaction-payment-rpc-runtime-api/std",
@@ -121,6 +127,8 @@ runtime-benchmarks = [
 	"pallet-sudo/runtime-benchmarks",
 	"pallet-template/runtime-benchmarks",
 	"pallet-dataassets/runtime-benchmarks",
+	"pallet-rewards/runtime-benchmarks",
+	"pallet-incentive/runtime-benchmarks",
 	"pallet-timestamp/runtime-benchmarks",
 	"pallet-vesting/runtime-benchmarks",
 	"pallet-transaction-payment/runtime-benchmarks",
@@ -138,6 +146,8 @@ try-runtime = [
 	"pallet-sudo/try-runtime",
 	"pallet-template/try-runtime",
 	"pallet-dataassets/try-runtime",
+	"pallet-rewards/try-runtime",
+	"pallet-incentive/try-runtime",
 	"pallet-timestamp/try-runtime",
 	"pallet-vesting/try-runtime",
 	"pallet-transaction-payment/try-runtime",

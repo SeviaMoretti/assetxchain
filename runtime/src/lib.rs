@@ -259,4 +259,7 @@ mod runtime {
 
 	#[runtime::pallet_index(13)]
     pub type Incentive = pallet_incentive;
+
+	#[runtime::pallet_index(14)]
+	pub type Contracts = pallet_contracts;
 }

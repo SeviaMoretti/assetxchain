@@ -26,7 +26,7 @@
 // Substrate and Polkadot dependencies
 use frame_support::{
 	derive_impl, parameter_types,
-	traits::{ConstU128, ConstU32, ConstU64, ConstU8, VariantCountOf, WithdrawReasons, Get},
+	traits::{ConstU128, ConstU32, ConstU64, ConstU8, ConstBool, VariantCountOf, WithdrawReasons, Get},
 	weights::{
 		constants::{RocksDbWeight, WEIGHT_REF_TIME_PER_SECOND},
 		IdentityFee, Weight,
@@ -34,6 +34,7 @@ use frame_support::{
 };
 use frame_system::pallet::Pallet as SystemPallet;
 use frame_system::limits::{BlockLength, BlockWeights};
+use frame_system::EnsureSigned;
 use pallet_transaction_payment::{ConstFeeMultiplier, FungibleAdapter, Multiplier};
 use sp_runtime::traits::OpaqueKeys;
 use sp_runtime::{traits::One, Perbill};
@@ -46,7 +47,7 @@ use super::{
 	AccountId, Balance, Balances, Block, BlockNumber, Hash, Nonce, PalletInfo, Runtime,
 	RuntimeCall, RuntimeEvent, RuntimeFreezeReason, RuntimeHoldReason, RuntimeOrigin, RuntimeTask,
 	System, EXISTENTIAL_DEPOSIT, SLOT_DURATION, VERSION, DAYS, HOURS, MILLI_SECS_PER_BLOCK,
-	Babe, SessionKeys, Vesting, DataAssets,
+	Babe, SessionKeys, Vesting, DataAssets, Contracts,
 };
 use crate::{Incentive, UNIT};
 
@@ -365,6 +366,109 @@ impl pallet_incentive::Config for Runtime {
     
     // 验证节点奖励配置
     type ValidatorVerificationReward = ValidatorVerificationReward;
+}
+
+// 合约模块的常量
+pub const CENTS: Balance = UNIT / 100; 
+pub const MILLICENTS: Balance = CENTS / 1_000;
+
+// 押金计算逻辑
+pub const fn deposit(items: u32, bytes: u32) -> Balance {
+    items as Balance * 15 * CENTS + (bytes as Balance) * 6 * CENTS
+}
+
+parameter_types! {
+    pub const DepositPerItem: Balance = deposit(1, 0);
+    pub const DepositPerByte: Balance = deposit(0, 1);
+    // 合约存储可以删除的队列深度
+    pub const DeletionQueueDepth: u32 = 128;
+    // 每次区块可以删除的最大存储项权重
+    pub const DeletionWeightLimit: Weight = Weight::from_parts(500_000_000, 0);
+    pub const DefaultDepositLimit: Balance = deposit(1024, 1024 * 1024);
+    pub const MaxCodeLen: u32 = 128 * 1024;
+    pub const MaxStorageKeyLen: u32 = 128;
+    pub const MaxDebugBufferLen: u32 = 2 * 1024 * 1024;
+    // UnsafeUnstableInterface用于开启实验性功能，生产环境y一般设为false
+    pub const UnsafeUnstableInterface: bool = true;
+    pub const CodeHashLockupDepositPercent: Perbill = Perbill::from_percent(30);
+}
+
+// 合约模块的调度表
+pub struct ContractsSchedule;
+impl frame_support::traits::Get<pallet_contracts::Schedule<Runtime>> for ContractsSchedule {
+    fn get() -> pallet_contracts::Schedule<Runtime> {
+        pallet_contracts::Schedule::<Runtime>::default()
+    }
+}
+
+// pallet_babe::ParentBlockRandomness<Runtime>返回Randomness<Option<H256>>，
+// 但是需要Randomness<H256>，因此需要一个适配器来处理为空的情况
+pub struct BabeRandomnessAdapter;
+impl frame_support::traits::Randomness<Hash, BlockNumber> for BabeRandomnessAdapter {
+    fn random(subject: &[u8]) -> (Hash, BlockNumber) {
+        // 调用 Babe 的随机数，如果为空则返回默认 Hash (0x00...)
+        let (hash, block) = pallet_babe::ParentBlockRandomness::<Runtime>::random(subject);
+        (hash.unwrap_or_default(), block)
+    }
+}
+
+impl pallet_contracts::Config for Runtime {
+    type Time = pallet_timestamp::Pallet<Runtime>;
+    // 使用 pallet_babe或pallet_rand作为随机数源
+    type Randomness = BabeRandomnessAdapter; 
+    type Currency = Balances;
+    type RuntimeEvent = RuntimeEvent;
+    type RuntimeCall = RuntimeCall;
+    
+    // 允许所有合约调用，不设置过滤器
+    type CallFilter = frame_support::traits::Nothing;
+    
+    // 将权重转换为费用，使用 transaction-payment 模块
+    type WeightPrice = pallet_transaction_payment::Pallet<Self>;
+    type WeightInfo = pallet_contracts::weights::SubstrateWeight<Self>;
+    
+    // 链扩展 (Chain Extension)，如果不需要自定义与 Runtime 交互的功能，设为 ()
+    type ChainExtension = (); 
+    
+    type Schedule = ContractsSchedule;
+    type CallStack = [pallet_contracts::Frame<Self>; 5]; // 调用栈深度
+    type DepositPerItem = DepositPerItem;
+    type DepositPerByte = DepositPerByte;
+    type DefaultDepositLimit = DefaultDepositLimit;
+    type AddressGenerator = pallet_contracts::DefaultAddressGenerator;
+    
+    // 代码与存储限制
+    type MaxCodeLen = ConstU32<{ 128 * 1024 }>;
+    type MaxStorageKeyLen = ConstU32<128>;
+    
+    // 开启不安全/不稳定接口 (仅限开发网或特定需求)
+    type UnsafeUnstableInterface = ConstBool<true>;
+    
+    // 调试缓冲区大小
+    type MaxDebugBufferLen = ConstU32<{ 2 * 1024 * 1024 }>;
+    
+    // 上传代码的权限：EnsureSigned表示允许任何签名账户上传
+    type UploadOrigin = EnsureSigned<Self::AccountId>;
+    
+    // 实例化合约的权限：允许任何签名账户实例化
+    type InstantiateOrigin = EnsureSigned<Self::AccountId>;
+
+    // 代码哈希锁定存款比例：通常设置为30%或0%
+    type CodeHashLockupDepositPercent = CodeHashLockupDepositPercent;
+    
+    // 最大代理依赖数：防止深层递归攻击
+    type MaxDelegateDependencies = ConstU32<32>;
+
+    // 最大瞬时存储大小
+    type MaxTransientStorageSize = ConstU32<{ 2 * 1024 * 1024 }>; // 2MB
+    type RuntimeHoldReason = RuntimeHoldReason;
+    type ApiVersion = ();
+
+    type Migrations = (); 
+    type Xcm = (); 
+    type Environment = (); 
+    
+    type Debug = (); 
 }
 
 impl crate::custom_header::AssetsStateRootProvider<sp_runtime::traits::BlakeTwo256> for Runtime {

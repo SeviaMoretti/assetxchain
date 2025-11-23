@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use jsonrpsee::RpcModule;
 use sc_transaction_pool_api::TransactionPool;
-use solochain_template_runtime::{opaque::Block, AccountId, Balance, Nonce};
+use solochain_template_runtime::{opaque::Block, AccountId, Balance, Nonce, BlockNumber, Hash, RuntimeEvent};
 use sp_api::ProvideRuntimeApi;
 use sp_block_builder::BlockBuilder;
 use sp_blockchain::{Error as BlockChainError, HeaderBackend, HeaderMetadata};
@@ -33,6 +33,14 @@ where
 	C::Api: substrate_frame_rpc_system::AccountNonceApi<Block, AccountId, Nonce>,
 	C::Api: pallet_transaction_payment_rpc::TransactionPaymentRuntimeApi<Block, Balance>,
 	C::Api: BlockBuilder<Block>,
+	C::Api: pallet_contracts::ContractsApi<
+		Block, 
+		AccountId, 
+		Balance, 
+		BlockNumber, 
+		Hash, 
+		frame_system::EventRecord<RuntimeEvent, Hash>
+	>,
 	P: TransactionPool + 'static,
 {
 	use pallet_transaction_payment_rpc::{TransactionPayment, TransactionPaymentApiServer};

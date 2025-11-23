@@ -31,7 +31,6 @@ use frame_support::{
 };
 use pallet_grandpa::AuthorityId as GrandpaId;
 use sp_api::impl_runtime_apis;
-// ✅ 修改：从 AuraId 改为 BabeId
 use sp_consensus_babe::AuthorityId as BabeId;
 use sp_core::{crypto::KeyTypeId, OpaqueMetadata, H256};
 use sp_runtime::{
@@ -41,12 +40,19 @@ use sp_runtime::{
 };
 use sp_version::RuntimeVersion;
 use pallet_dataassets as pallet_data_assets;
+use pallet_contracts::{Code, Determinism};
 
 // Local module imports
 use super::{
 	AccountId, Babe, Balance, Block, Executive, Grandpa, InherentDataExt, Nonce, Runtime,
 	RuntimeCall, RuntimeGenesisConfig, SessionKeys, System, TransactionPayment, VERSION,
+	Contracts, BlockNumber, Hash, RuntimeEvent,
 };
+use crate::configs::RuntimeBlockWeights;
+
+impl pallet_contracts::chain_extension::RegisteredChainExtension<Runtime> for () {
+	const ID: u16 = 0; 
+}
 
 impl_runtime_apis! {
 	impl sp_api::Core<Block> for Runtime {
@@ -350,4 +356,88 @@ impl_runtime_apis! {
 			pallet_data_assets::Pallet::<Runtime>::compute_asset_root()
 		}
 	}
+
+    impl pallet_contracts::ContractsApi<
+        Block, 
+        AccountId, 
+        Balance, 
+        BlockNumber, 
+        Hash, 
+        frame_system::EventRecord<RuntimeEvent, Hash>
+    > for Runtime
+    {
+        fn call(
+            origin: AccountId,
+            dest: AccountId,
+            value: Balance,
+            gas_limit: Option<Weight>,
+            storage_deposit_limit: Option<Balance>,
+            input_data: Vec<u8>,
+        ) -> pallet_contracts::ContractExecResult<Balance, frame_system::EventRecord<RuntimeEvent, Hash>> {
+            // 获取 BlockWeights
+            let gas_limit = gas_limit.unwrap_or(RuntimeBlockWeights::get().max_block);
+            
+            Contracts::bare_call(
+                origin,
+                dest,
+                value,
+                gas_limit,
+                storage_deposit_limit,
+                input_data,
+                pallet_contracts::DebugInfo::UnsafeDebug,
+                pallet_contracts::CollectEvents::UnsafeCollect,
+                pallet_contracts::Determinism::Enforced,
+            )
+        }
+
+        fn instantiate(
+            origin: AccountId,
+            value: Balance,
+            gas_limit: Option<Weight>,
+            storage_deposit_limit: Option<Balance>,
+            code: pallet_contracts::Code<Hash>, // 注意这里的路径
+            data: Vec<u8>,
+            salt: Vec<u8>,
+        ) -> pallet_contracts::ContractInstantiateResult<AccountId, Balance, frame_system::EventRecord<RuntimeEvent, Hash>>
+        {
+            let gas_limit = gas_limit.unwrap_or(RuntimeBlockWeights::get().max_block);
+            
+            Contracts::bare_instantiate(
+                origin,
+                value,
+                gas_limit,
+                storage_deposit_limit,
+                code,
+                data,
+                salt,
+                pallet_contracts::DebugInfo::UnsafeDebug,
+                pallet_contracts::CollectEvents::UnsafeCollect,
+            )
+        }
+
+        fn upload_code(
+            origin: AccountId,
+            code: Vec<u8>,
+            storage_deposit_limit: Option<Balance>,
+            determinism: pallet_contracts::Determinism, 
+        ) -> pallet_contracts::CodeUploadResult<Hash, Balance>
+        {
+            Contracts::bare_upload_code(
+                origin,
+                code,
+                storage_deposit_limit,
+                determinism,
+            )
+        }
+
+        fn get_storage(
+            address: AccountId,
+            key: Vec<u8>,
+        ) -> pallet_contracts::GetStorageResult {
+            Contracts::get_storage(
+                address,
+                key
+            )
+        }
+    }
 }

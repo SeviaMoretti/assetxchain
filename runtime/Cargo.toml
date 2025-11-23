@@ -28,6 +28,7 @@ sp-consensus-babe.workspace = true
 pallet-session.workspace = true
 pallet-authorship.workspace = true
 pallet-balances.workspace = true
+pallet-contracts.workspace = true
 pallet-grandpa.workspace = true
 pallet-sudo.workspace = true
 pallet-template.workspace = true
@@ -86,6 +87,7 @@ std = [
     "pallet-session/std",
     "pallet-authorship/std",
 	"pallet-balances/std",
+	"pallet-contracts/std",
 	"pallet-grandpa/std",
 	"pallet-sudo/std",
 	"pallet-template/std",

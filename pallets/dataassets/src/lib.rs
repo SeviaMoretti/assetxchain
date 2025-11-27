@@ -92,6 +92,16 @@ pub mod pallet {
         CollateralInfo<T::AccountId, BalanceOf<T>, BlockNumberFor<T>>,
     >;
 
+    #[pallet::storage]
+    #[pallet::getter(fn asset_approvals)]
+    pub type AssetApprovals<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        [u8; 32], // asset_id
+        T::AccountId, // authorized operator (market)
+        OptionQuery
+    >;
+
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
@@ -108,6 +118,10 @@ pub mod pallet {
         CollateralSlashed { asset_id: [u8; 32], amount: BalanceOf<T>, percentage: u8 },
         CollateralOverCappedHint {
             asset_id: [u8; 32], depositor: T::AccountId, total_uncapped: BalanceOf<T>, capped_amount: BalanceOf<T>, max_collateral: BalanceOf<T> },
+        /// Asset authorized to a market/operator
+        AssetAuthorized { asset_id: [u8; 32], owner: T::AccountId, operator: T::AccountId },
+        /// Authorization revoked
+        AuthorizationRevoked { asset_id: [u8; 32], owner: T::AccountId },
     }
 
     #[pallet::error]
@@ -125,6 +139,9 @@ pub mod pallet {
         InsufficientBalance,
         CollateralNotFound,
         InvalidSlashPercentage,
+
+        NotAuthorized,
+        AlreadyAuthorized,
     }
 
     #[pallet::hooks]
@@ -187,7 +204,7 @@ pub mod pallet {
                 let total_uncapped = T::BaseCollateral::get()
                     .saturating_add(variable_collateral);
                 
-                // 发射超限提示事件（需在 Event 枚举中新增该事件）
+                // 发射超限提示事件
                 Self::deposit_event(Event::CollateralOverCappedHint {
                     asset_id,
                     depositor: who.clone(),
@@ -218,6 +235,8 @@ pub mod pallet {
             Ok(())
         }
 
+        // ！！！！！！！！！！由于双层状态树不使用了，所以需要重新实现，并且发行权证的费用要覆盖权证行权的费用
+        // !!!!!!!!!!!!发行权证，交易的发起者要么是资产所有者，要么是被授权的市场账户
         #[pallet::call_index(1)]
         #[pallet::weight(10_000)]
         pub fn issue_certificate(
@@ -227,10 +246,13 @@ pub mod pallet {
             right_type: u8,
             valid_until: Option<u64>,
         ) -> DispatchResult {
-            let who = ensure_signed(origin)?;
-            
+            let who = ensure_signed(origin)?;          
             let asset = Self::get_asset(&asset_id).ok_or(Error::<T>::AssetNotFound)?;
-            ensure!(asset.owner == who, Error::<T>::NotOwner);
+
+            let is_owner = asset.owner == who;
+            let is_approved = Self::asset_approvals(&asset_id).map_or(false, |operator| operator == who);
+            
+            ensure!(is_owner || is_approved, Error::<T>::NotAuthorized);
             ensure!(asset.is_active(), Error::<T>::AssetNotActive);
             
             // 转换 u8 到 RightType
@@ -243,7 +265,7 @@ pub mod pallet {
             let token_id = Self::get_next_certificate_id(&asset_id);
             let current_time = Self::current_timestamp();
             
-            // 使用 minimal 构造函数
+            // 使用 minimal 构造函数，没有修改issuer，市场只是代理
             let mut certificate = RightToken::minimal(
                 token_id,
                 right_type_enum,
@@ -272,7 +294,7 @@ pub mod pallet {
             let who = ensure_signed(origin)?;
             
             let mut asset = Self::get_asset(&asset_id).ok_or(Error::<T>::AssetNotFound)?;
-            ensure!(asset.owner == who, Error::<T>::NotOwner); // 只有资产所有者才能转移资产
+            ensure!(asset.owner == who, Error::<T>::NotOwner); // 在未被授权的时候，只有资产所有者才能转移资产
             ensure!(!asset.is_locked(), Error::<T>::AssetLocked); // 锁定的资产不能转移
             
             let old_owner = asset.owner.clone();
@@ -282,7 +304,8 @@ pub mod pallet {
             asset.updated_at = Self::current_timestamp();
             
             Self::insert_asset(&asset_id, &asset)?;
-            
+            // 如果所有者自己转移资产，清除该资产上所有未完成的市场授权。确保授权记录不会残留。
+            AssetApprovals::<T>::remove(asset_id);
             Self::deposit_event(Event::AssetTransferred { asset_id, from: old_owner, to: new_owner });
             Ok(())
         }
@@ -336,7 +359,7 @@ pub mod pallet {
             ensure!(asset.owner == who, Error::<T>::NotOwner);
             
             asset.is_locked = false;
-            asset.status = AssetStatus::Active;
+            asset.status = AssetStatus::Private;
             asset.updated_at = Self::current_timestamp();
             
             Self::insert_asset(&asset_id, &asset)?;
@@ -351,6 +374,107 @@ pub mod pallet {
             ensure_root(origin)?;
             
             Self::slash_collateral(&asset_id, slash_percentage)?;
+            
+            Ok(())
+        }
+
+        /// 授权资产给市场账户（或其他账户）
+        #[pallet::call_index(7)] // 确保索引号递增，不要重复
+        #[pallet::weight(10_000)]
+        pub fn authorize_market(
+            origin: OriginFor<T>,
+            asset_id: [u8; 32],
+            market_account: T::AccountId,
+        ) -> DispatchResult {
+            let who = ensure_signed(origin)?;
+            
+            // 验证资产存在且属于调用者
+            let asset = Self::get_asset(&asset_id).ok_or(Error::<T>::AssetNotFound)?;
+            ensure!(asset.owner == who, Error::<T>::NotOwner);
+            ensure!(!asset.is_locked(), Error::<T>::AssetLocked); // 锁定资产不允许改变授权状态
+            ensure!(!asset.is_approved(), Error::<T>::AlreadyAuthorized); // 已被授权的资产不能再次授权
+            
+            // 防止重复授权给同一账户
+            if let Some(current_operator) = Self::asset_approvals(&asset_id) {
+                ensure!(current_operator != market_account, Error::<T>::AlreadyAuthorized);
+            }
+
+            // 存储授权信息
+            AssetApprovals::<T>::insert(&asset_id, &market_account);
+            
+            // 发出事件
+            Self::deposit_event(Event::AssetAuthorized { 
+                asset_id, 
+                owner: who, 
+                operator: market_account 
+            });
+            
+            Ok(())
+        }
+
+        /// 撤销对市场的授权
+        #[pallet::call_index(8)]
+        #[pallet::weight(10_000)]
+        pub fn revoke_authorization(
+            origin: OriginFor<T>,
+            asset_id: [u8; 32],
+        ) -> DispatchResult {
+            let who = ensure_signed(origin)?;
+            
+            let asset = Self::get_asset(&asset_id).ok_or(Error::<T>::AssetNotFound)?;
+            ensure!(asset.owner == who, Error::<T>::NotOwner);
+            
+            if AssetApprovals::<T>::contains_key(&asset_id) {
+                AssetApprovals::<T>::remove(&asset_id);
+                Self::deposit_event(Event::AuthorizationRevoked { 
+                    asset_id, 
+                    owner: who 
+                });
+            }
+            
+            Ok(())
+        }
+
+        /// 市场账户（被授权方）转移资产
+        #[pallet::call_index(9)]
+        #[pallet::weight(10_000)]
+        pub fn transfer_asset_by_market(
+            origin: OriginFor<T>,
+            asset_id: [u8; 32],
+            new_owner: T::AccountId,
+        ) -> DispatchResult {
+            let market = ensure_signed(origin)?;
+            
+            // 1. 获取资产
+            let mut asset = Self::get_asset(&asset_id).ok_or(Error::<T>::AssetNotFound)?;
+            
+            // 2. 验证是否被授权
+            let approved_account = Self::asset_approvals(&asset_id).ok_or(Error::<T>::NotAuthorized)?;
+            ensure!(approved_account == market, Error::<T>::NotAuthorized);
+            
+            // 3. 检查资产状态
+            ensure!(!asset.is_locked(), Error::<T>::AssetLocked);
+            
+            let old_owner = asset.owner.clone();
+            
+            // 4. 执行转移逻辑
+            asset.owner = new_owner.clone();
+            asset.nonce += 1;
+            asset.transaction_count += 1;
+            asset.updated_at = Self::current_timestamp();
+            
+            // 5. 更新资产树
+            Self::insert_asset(&asset_id, &asset)?;
+            
+            // 6. 转移后通常清除授权（ERC721标准行为，防止前任市场继续控制）
+            AssetApprovals::<T>::remove(&asset_id);
+            
+            // 7. 发出事件
+            Self::deposit_event(Event::AssetTransferred { 
+                asset_id, 
+                from: old_owner, 
+                to: new_owner 
+            });
             
             Ok(())
         }
@@ -491,6 +615,43 @@ pub mod pallet {
         
         fn current_timestamp() -> u64 {
             <pallet_timestamp::Pallet<T>>::get().saturated_into::<u64>()
+        }
+
+        /// 供其他Pallet调用的方法，跳过签名检查，但检查授权
+        pub fn transfer_by_market_internal(
+            asset_id: &[u8; 32],
+            market_account: &T::AccountId,
+            new_owner: &T::AccountId
+        ) -> DispatchResult {
+            // 1. 获取资产
+            let mut asset = Self::get_asset(asset_id).ok_or(Error::<T>::AssetNotFound)?;
+            
+            // 2. 核心检查：检查当前资产是否授权给了调用者 (market_account)
+            let approved_account = Self::asset_approvals(asset_id).ok_or(Error::<T>::NotAuthorized)?;
+            ensure!(approved_account == *market_account, Error::<T>::NotAuthorized);
+            
+            // 3. 检查锁定状态
+            ensure!(!asset.is_locked(), Error::<T>::AssetLocked);
+            
+            // 4. 执行转移
+            let old_owner = asset.owner.clone();
+            asset.owner = new_owner.clone();
+            asset.nonce += 1;
+            asset.transaction_count += 1;
+            asset.updated_at = Self::current_timestamp();
+            
+            // 5. 保存并清理授权
+            Self::insert_asset(asset_id, &asset)?;
+            AssetApprovals::<T>::remove(asset_id);
+            
+            // 6. 发出事件
+            Self::deposit_event(Event::AssetTransferred { 
+                asset_id: *asset_id, 
+                from: old_owner, 
+                to: new_owner.clone() 
+            });
+            
+            Ok(())
         }
     }
 

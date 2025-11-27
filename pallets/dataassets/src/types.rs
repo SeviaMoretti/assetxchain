@@ -47,7 +47,7 @@ pub struct DataAsset<AccountId> {
     
     // Transaction and state info
     pub nonce: u32,
-    pub is_locked: bool,
+    pub is_locked: bool, // ！！！！！！！！！和status重复了
     
     // Encryption info
     pub encryption_info: EncryptionInfo,
@@ -57,8 +57,8 @@ pub struct DataAsset<AccountId> {
     
     // Statistics
     pub view_count: u64,
-    pub transaction_count: u64, // 多余了，已经有nonce了
-    pub total_revenue: u128,
+    pub transaction_count: u64, // ！！！！！！！！多余了，已经有nonce了
+    pub total_revenue: u128, // 总收益，权证销售额
     
     // Pricing configuration
     pub pricing_config: PricingConfig,
@@ -68,6 +68,9 @@ pub struct DataAsset<AccountId> {
     
     // Update timestamp
     pub updated_at: u64,
+    // 活力值，用来评估资产的使用价值和活跃度，受权证销售情况影响
+    // 生命值，与IPFS存储池和加密后的数据大小相关
+    // 
 }
 
 /// Right Token (Certificate) Structure
@@ -208,8 +211,9 @@ pub enum RightType {
 /// Asset Status Enumeration
 #[derive(Encode, Decode, Clone, PartialEq, Eq, Debug, TypeInfo)]
 pub enum AssetStatus {
-    Active = 1,
+    Private = 1, // 私有资产，只有资产所有者可以使用
     Locked = 2,
+    Approved = 3, // 已授权，被资产所有者授权给市场
 }
 
 /// Certificate Status Enumeration
@@ -264,7 +268,7 @@ impl<AccountId: Default> Default for DataAsset<AccountId> {
             transaction_count: 0,
             total_revenue: 0,
             pricing_config: PricingConfig::default(),
-            status: AssetStatus::Active,
+            status: AssetStatus::Private,
             updated_at: 0,
         }
     }
@@ -334,10 +338,15 @@ impl<AccountId: Clone> DataAsset<AccountId> {
     pub fn is_locked(&self) -> bool {
         self.is_locked || self.status == AssetStatus::Locked
     }
+
+    pub fn is_approved(&self) -> bool {
+        self.status == AssetStatus::Approved
+    }
     
     /// Check if asset is active
+    /// 应该修改成is_not_locked
     pub fn is_active(&self) -> bool {
-        self.status == AssetStatus::Active && !self.is_locked()
+        self.status == AssetStatus::Private && !self.is_locked()
     }
 }
 
@@ -441,7 +450,7 @@ impl<AccountId: Clone + Encode> DataAsset<AccountId> {
             },
             
             // Status
-            status: AssetStatus::Active,
+            status: AssetStatus::Private,
             updated_at: timestamp,
         }
     }

@@ -1,0 +1,31 @@
+[package]
+name = "pallet-markets"
+version = "0.1.0"
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+edition.workspace = true
+
+[dependencies]
+codec = { features = ["derive"], workspace = true }
+frame-support.workspace = true
+frame-system.workspace = true
+scale-info = { features = ["derive"], workspace = true }
+sp-runtime.workspace = true
+sp-std.workspace = true
+pallet-dataassets.workspace = true
+pallet-shared-traits.workspace = true
+
+[features]
+default = ["std"]
+std = [
+	"codec/std",
+	"scale-info/std",
+	"frame-support/std",
+	"frame-system/std",
+	"sp-runtime/std",
+	"sp-std/std",
+    "pallet-dataassets/std",
+	"pallet-shared-traits/std",
+]

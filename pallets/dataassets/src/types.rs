@@ -213,7 +213,8 @@ pub enum RightType {
 pub enum AssetStatus {
     Private = 1, // 私有资产，只有资产所有者可以使用
     Locked = 2,
-    Approved = 3, // 已授权，被资产所有者授权给市场
+    Approved = 3, // 已授权，被资产所有者授权给市场 ！！！将这个删除，要判断资产是否已授权的话，
+    // 直接判断 AssetApprovals::<T>::contains_key(&asset_id) 是否为 true 即可，每次授权都修改资产状态不划算
 }
 
 /// Certificate Status Enumeration

@@ -1,303 +1,137 @@
+// 资产交易市场模块
+// 与pallet-contracts交互，实现资产交易市场
+// 市场：交易模式：订单薄、拍卖等
+//      准入规则
+//      手续费
+//      资产类型：数据元证、权证
+// 
+// pallet存储：市场注册表（创建者、合约账户）
+// 市场相关合约-合约账户
 #![cfg_attr(not(feature = "std"), no_std)]
 
 pub use pallet::*;
+
+mod original_lib;
 
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
     use frame_support::pallet_prelude::*;
     use frame_system::pallet_prelude::*;
-    use sp_runtime::traits::{
-        AccountIdConversion, CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Zero
-    };
-    use frame_support::traits::{Currency, ExistenceRequirement, Get};
-    use frame_support::PalletId;
-    use sp_runtime::Perbill;
-    use scale_info::TypeInfo;
-    use sp_runtime::RuntimeDebug;
+
     use codec::{Encode, Decode, MaxEncodedLen, DecodeWithMemTracking};
-
-    pub type AssetId = [u8; 32];
-    type BalanceOf<T> = <<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
-
-    // ===================================================================
-    // 1. 数据结构
-    // ===================================================================
-
-    #[derive(Encode, Decode, DecodeWithMemTracking, Clone, Copy, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
-    pub enum MarketMechanism {
-        OrderBook,
-        // AMM 在 NFT/Unique Asset 场景下较复杂，这里简化为不支持或仅支持整单兑换
-        // 如果需要 AMM 支持，建议资产本身支持 Shared/Fractionalized
-        AMM, 
-    }
-
-    #[derive(Encode, Decode, DecodeWithMemTracking, Clone, Copy, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
-    pub enum AccessRule {
-        Public,
-        QualityGate {
-            min_score: u8,
-            must_be_verified: bool,
-        },
-    }
-
-    #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
-    pub struct MarketInfo<AccountId> {
-        pub creator: AccountId,
-        pub mechanism: MarketMechanism,
-        pub access_rule: AccessRule,
-        pub fee_ratio: u32,
-        pub active: bool,
-    }
-
-    #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
-    pub struct ListingInfo<AccountId, Balance, MarketId> {
-        pub market_id: MarketId,
-        pub seller: AccountId,
-        pub asset_id: AssetId,
-        pub price: Balance,
-    }
-
-    // ===================================================================
-    // 2. Config
-    // ===================================================================
-    #[pallet::config]
-    pub trait Config: frame_system::Config + pallet_dataassets::Config {
-        type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
-
-        type Currency: Currency<Self::AccountId>;
-
-        #[pallet::constant]
-        type PalletId: Get<PalletId>;
-
-        type MarketId: Parameter + Member + Copy + Default + MaxEncodedLen + One + CheckedAdd + PartialEq;
-        type ListingId: Parameter + Member + Copy + Default + MaxEncodedLen + One + CheckedAdd;
-    }
-
+    
     #[pallet::pallet]
     pub struct Pallet<T>(_);
-
-    // ===================================================================
-    // 3. Storage
-    // ===================================================================
     
-    #[pallet::storage]
-    pub type MarketCount<T: Config> = StorageValue<_, T::MarketId, ValueQuery>;
-    
-    #[pallet::storage]
-    pub type ListingCount<T: Config> = StorageValue<_, T::ListingId, ValueQuery>;
+    // 定义市场支持的资产类型，另一种资产类型在准入规则中限制、定义
+    #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen, DecodeWithMemTracking)]
+    pub enum MarketAssetType {
+        DataAsset,      // 交易元证 (Assets)
+        Certificate,    // 交易权证 (Certificates)
+    }
 
-    #[pallet::storage]
-    #[pallet::getter(fn markets)]
-    pub type Markets<T: Config> = StorageMap<_, Blake2_128Concat, T::MarketId, MarketInfo<T::AccountId>>;
+    // 市场元数据
+    #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen, DecodeWithMemTracking)]
+    pub struct MarketRegistryInfo<AccountId> {
+        pub creator: AccountId,         // 创建者
+        pub contract_address: AccountId,// 智能合约地址 (Ink!合约部署后的地址)
+        pub asset_type: MarketAssetType,// 交易资产类型
+        pub status: MarketStatus,       // Active, Suspended
+    }
 
-    #[pallet::storage]
-    #[pallet::getter(fn listings)]
-    pub type Listings<T: Config> = StorageMap<_, Blake2_128Concat, T::ListingId, ListingInfo<T::AccountId, BalanceOf<T>, T::MarketId>>;
+    #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen, DecodeWithMemTracking)]
+    pub enum MarketStatus {
+        Active,
+        Inactive,
+    }
 
-    // ===================================================================
-    // 4. Events & Errors
-    // ===================================================================
+    #[pallet::config]
+    pub trait Config: frame_system::Config {
+        type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
+    }
+
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
-        MarketCreated { market_id: T::MarketId, creator: T::AccountId, mechanism: MarketMechanism },
-        AssetListed { market_id: T::MarketId, listing_id: T::ListingId, seller: T::AccountId, asset_id: AssetId, price: BalanceOf<T> },
-        AssetSold { market_id: T::MarketId, listing_id: T::ListingId, buyer: T::AccountId, price: BalanceOf<T> },
-        ListingCancelled { market_id: T::MarketId, listing_id: T::ListingId },
+        MarketRegistered {
+            creator: T::AccountId,
+            contract_address: T::AccountId,
+            asset_type: MarketAssetType,
+        },
+        MarketUnregistered {
+            contract_address: T::AccountId,
+        },
     }
 
     #[pallet::error]
     pub enum Error<T> {
+        /// 市场已存在
+        MarketAlreadyExists,
+        /// 市场不存在
         MarketNotFound,
-        MarketNotActive,
-        ListingNotFound,
-        WrongMarketMechanism,
-        ListingNotInMarket,
-        QualityTooLow,
-        NotVerified,
-        AssetNotFound,
+        /// 不是市场所有者
         NotOwner,
-        MathOverflow,
-        /// 市场未获得资产授权，请先在 DataAssets 模块调用 authorize_market
-        MarketNotAuthorized,
-        /// 资产已被其他人授权给别的市场
-        AssetAuthorizedToOthers,
     }
 
-    // ===================================================================
-    // 5. Extrinsics
-    // ===================================================================
+    #[pallet::storage]
+    #[pallet::getter(fn registered_markets)]
+    // 使用 ContractAddress 作为 Key，确保一个合约对应一个市场记录
+    pub type RegisteredMarkets<T: Config> = StorageMap<
+        _, 
+        Blake2_128Concat, 
+        T::AccountId, // Contract Address
+        MarketRegistryInfo<T::AccountId>
+    >;
+
     #[pallet::call]
     impl<T: Config> Pallet<T> {
-        
+        /// 注册一个新市场
+        /// 用户先部署智能合约，获得 contract_address，然后调用此函数进行注册
         #[pallet::call_index(0)]
         #[pallet::weight(10_000)]
-        pub fn create_market(
+        pub fn register_market(
             origin: OriginFor<T>,
-            mechanism: MarketMechanism, 
-            access_rule: AccessRule,
-            fee_ratio: u32,
+            contract_address: T::AccountId,
+            asset_type: MarketAssetType,
         ) -> DispatchResult {
             let creator = ensure_signed(origin)?;
-            ensure!(fee_ratio <= 10000, Error::<T>::MathOverflow);
 
-            let market_id = MarketCount::<T>::get();
-            let next_id = market_id.checked_add(&One::one()).ok_or(Error::<T>::MathOverflow)?;
-            
-            let mechanism_clone = mechanism.clone();
-            
-            let info = MarketInfo {
+            // 确保该合约地址没有被注册过
+            ensure!(!RegisteredMarkets::<T>::contains_key(&contract_address), Error::<T>::MarketAlreadyExists);
+            let asset_type_for_event = asset_type.clone();
+            // 这里添加逻辑验证 contract_address 是否真的是一个合约 (依赖 pallet-contracts)
+            // 验证调用者是否拥有该合约的 owner 权限
+
+            let info = MarketRegistryInfo {
                 creator: creator.clone(),
-                mechanism,
-                access_rule,
-                fee_ratio,
-                active: true,
+                contract_address: contract_address.clone(),
+                asset_type,
+                status: MarketStatus::Active,
             };
 
-            Markets::<T>::insert(market_id, info);
-            Self::deposit_event(Event::MarketCreated { market_id, creator, mechanism: mechanism_clone });
-            MarketCount::<T>::put(next_id);
+            RegisteredMarkets::<T>::insert(&contract_address, info);
+
+            Self::deposit_event(Event::MarketRegistered { creator, contract_address, asset_type: asset_type_for_event });
             Ok(())
         }
 
-        /// 卖家挂单 (OrderBook)
-        /// 前置条件：卖家必须先在 pallet-dataassets 调用 `authorize_market(asset_id, market_account_id)`
+        /// 注销市场
         #[pallet::call_index(1)]
         #[pallet::weight(10_000)]
-        pub fn list_asset(
+        pub fn unregister_market(
             origin: OriginFor<T>,
-            market_id: T::MarketId,
-            asset_id: AssetId,
-            price: BalanceOf<T>,
-        ) -> DispatchResult {
-            let seller = ensure_signed(origin)?;
-            let market = Markets::<T>::get(market_id).ok_or(Error::<T>::MarketNotFound)?;
-            ensure!(market.active, Error::<T>::MarketNotActive);
-            ensure!(market.mechanism == MarketMechanism::OrderBook, Error::<T>::WrongMarketMechanism);
-
-            // 1. 验证资产所有权
-            let asset = pallet_dataassets::Pallet::<T>::get_asset(&asset_id)
-                .ok_or(Error::<T>::AssetNotFound)?;
-            ensure!(asset.owner == seller, Error::<T>::NotOwner);
-
-            // 2. 验证市场准入规则
-            Self::check_access_rule(&market, &asset_id)?;
-
-            // 3. 【核心修改】验证授权
-            // 我们需要确保 assets 模块中，该 asset 已经 approve 给了当前市场的 account_id
-            let market_account = Self::account_id();
-            let approved_account = pallet_dataassets::Pallet::<T>::asset_approvals(&asset_id)
-                .ok_or(Error::<T>::MarketNotAuthorized)?;
-            
-            ensure!(approved_account == market_account, Error::<T>::AssetAuthorizedToOthers);
-
-            // 4. 创建挂单 (不再转移资产，只记录挂单)
-            let listing_id = ListingCount::<T>::get();
-            let next_lid = listing_id.checked_add(&One::one()).ok_or(Error::<T>::MathOverflow)?;
-
-            let listing = ListingInfo {
-                market_id,
-                seller: seller.clone(),
-                asset_id,
-                price,
-            };
-            Listings::<T>::insert(listing_id, listing);
-            ListingCount::<T>::put(next_lid);
-
-            Self::deposit_event(Event::AssetListed { market_id, listing_id, seller, asset_id, price });
-            Ok(())
-        }
-
-        /// 买家购买
-        #[pallet::call_index(2)]
-        #[pallet::weight(10_000)]
-        pub fn buy_asset(
-            origin: OriginFor<T>,
-            market_id: T::MarketId,
-            listing_id: T::ListingId,
-        ) -> DispatchResult {
-            let buyer = ensure_signed(origin)?;
-            let listing = Listings::<T>::get(listing_id).ok_or(Error::<T>::ListingNotFound)?;
-            
-            ensure!(listing.market_id == market_id, Error::<T>::ListingNotInMarket);
-            let market = Markets::<T>::get(market_id).ok_or(Error::<T>::MarketNotFound)?;
-            ensure!(market.active, Error::<T>::MarketNotActive);
-
-            // 1. 计算费用
-            let (fee, seller_receive) = Self::calc_fee(listing.price, market.fee_ratio)?;
-
-            // 2. 执行资金划转 (原子性由 Substrate 保证，若后续步骤失败会回滚)
-            // 买家 -> 市场创建者 (Fee)
-            if !fee.is_zero() {
-                <T as Config>::Currency::transfer(&buyer, &market.creator, fee, ExistenceRequirement::KeepAlive)?;
-            }
-            // 买家 -> 卖家 (货款)
-            <T as Config>::Currency::transfer(&buyer, &listing.seller, seller_receive, ExistenceRequirement::KeepAlive)?;
-
-            // 3. 【核心修改】执行资产交割
-            // 调用 dataassets 的内部方法，以市场身份转移资产
-            // 注意：这里我们假设在 pallet-dataassets 中添加了 `transfer_by_market_internal`
-            // 如果没有添加，则无法通过编译
-            let market_account = Self::account_id();
-            pallet_dataassets::Pallet::<T>::transfer_by_market_internal(
-                &listing.asset_id,
-                &market_account,
-                &buyer
-            )?;
-
-            // 4. 移除挂单
-            Listings::<T>::remove(listing_id);
-
-            Self::deposit_event(Event::AssetSold { market_id, listing_id, buyer, price: listing.price });
-            Ok(())
-        }
-
-        /// 取消挂单
-        #[pallet::call_index(3)]
-        #[pallet::weight(10_000)]
-        pub fn cancel_listing(
-            origin: OriginFor<T>,
-            market_id: T::MarketId,
-            listing_id: T::ListingId,
+            contract_address: T::AccountId,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
-            let listing = Listings::<T>::get(listing_id).ok_or(Error::<T>::ListingNotFound)?;
-            ensure!(listing.market_id == market_id, Error::<T>::ListingNotInMarket);
-            ensure!(listing.seller == who, Error::<T>::NotOwner);
-
-            Listings::<T>::remove(listing_id);
-            // 注意：取消挂单不自动撤销授权，用户需要手动去 dataassets 撤销，或者这里可以跨模块调用撤销
             
-            Self::deposit_event(Event::ListingCancelled { market_id, listing_id });
+            let market = RegisteredMarkets::<T>::get(&contract_address).ok_or(Error::<T>::MarketNotFound)?;
+            ensure!(market.creator == who, Error::<T>::NotOwner);
+
+            RegisteredMarkets::<T>::remove(&contract_address);
+            
+            Self::deposit_event(Event::MarketUnregistered { contract_address });
             Ok(())
-        }
-    }
-
-    impl<T: Config> Pallet<T> {
-        /// 获取市场的托管账户/操作账户
-        pub fn account_id() -> T::AccountId {
-            T::PalletId::get().into_account_truncating()
-        }
-
-        fn check_access_rule(market: &MarketInfo<T::AccountId>, _asset_id: &AssetId) -> DispatchResult {
-            match market.access_rule {
-                AccessRule::Public => Ok(()),
-                AccessRule::QualityGate { .. } => {
-                    // 这里由于 DataAsset 结构体定义中没有 quality 字段（根据你提供的 lib.rs），
-                    // 我们先暂时跳过具体的质量检查，或者你需要确保 DataAsset 有相关字段。
-                    // 假设 dataassets 提供了获取质量的方法：
-                    // let score = pallet_dataassets::Pallet::<T>::get_asset_quality(asset_id);
-                    Ok(())
-                }
-            }
-        }
-
-        fn calc_fee(amount: BalanceOf<T>, ratio: u32) -> Result<(BalanceOf<T>, BalanceOf<T>), Error<T>> {
-            let fee_part = Perbill::from_rational(ratio, 10000);
-            let fee = fee_part * amount;
-            let remaining = amount.checked_sub(&fee).ok_or(Error::<T>::MathOverflow)?;
-            Ok((fee, remaining))
         }
     }
 }

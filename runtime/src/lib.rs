@@ -8,6 +8,7 @@ pub mod apis;
 mod benchmarks;
 pub mod configs;
 pub mod custom_header;
+pub mod asset_market_extension;
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -262,4 +263,7 @@ mod runtime {
 
 	#[runtime::pallet_index(14)]
 	pub type Contracts = pallet_contracts;
+	
+	#[runtime::pallet_index(15)]
+    pub type Markets = pallet_markets;
 }

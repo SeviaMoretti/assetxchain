@@ -6078,6 +6078,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pallet-collaterals"
+version = "0.1.0"
+dependencies = [
+ "frame-support",
+ "frame-system",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-runtime",
+ "sp-std",
+]
+
+[[package]]
 name = "pallet-contracts"
 version = "40.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6188,6 +6200,18 @@ dependencies = [
  "scale-info",
  "sp-core 36.1.0",
  "sp-io",
+ "sp-runtime",
+ "sp-std",
+]
+
+[[package]]
+name = "pallet-markets"
+version = "0.1.0"
+dependencies = [
+ "frame-support",
+ "frame-system",
+ "parity-scale-codec",
+ "scale-info",
  "sp-runtime",
  "sp-std",
 ]
@@ -10171,6 +10195,7 @@ dependencies = [
  "pallet-dataassets",
  "pallet-grandpa",
  "pallet-incentive",
+ "pallet-markets",
  "pallet-rewards",
  "pallet-session",
  "pallet-shared-traits",

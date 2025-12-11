@@ -26,6 +26,7 @@
 // Substrate and Polkadot dependencies
 use frame_support::{
 	derive_impl, parameter_types,
+    PalletId,
 	traits::{ConstU128, ConstU32, ConstU64, ConstU8, ConstBool, VariantCountOf, WithdrawReasons, Get},
 	weights::{
 		constants::{RocksDbWeight, WEIGHT_REF_TIME_PER_SECOND},
@@ -49,7 +50,7 @@ use super::{
 	System, EXISTENTIAL_DEPOSIT, SLOT_DURATION, VERSION, DAYS, HOURS, MILLI_SECS_PER_BLOCK,
 	Babe, SessionKeys, Vesting, DataAssets, Contracts,
 };
-use crate::{Incentive, UNIT};
+use crate::{Incentive, UNIT, asset_market_extension};
 
 const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(75);
 
@@ -428,7 +429,8 @@ impl pallet_contracts::Config for Runtime {
     type WeightInfo = pallet_contracts::weights::SubstrateWeight<Self>;
     
     // 链扩展 (Chain Extension)，如果不需要自定义与 Runtime 交互的功能，设为 ()
-    type ChainExtension = (); 
+    // 现在需要智能合约可以影响到数据资产的状态，因此需要引入数据资产扩展模块
+    type ChainExtension = asset_market_extension::DataAssetsExtension; 
     
     type Schedule = ContractsSchedule;
     type CallStack = [pallet_contracts::Frame<Self>; 5]; // 调用栈深度
@@ -469,6 +471,16 @@ impl pallet_contracts::Config for Runtime {
     type Environment = (); 
     
     type Debug = (); 
+}
+
+parameter_types! {
+    pub const MarketsPalletId: PalletId = PalletId(*b"da/mrket");
+    pub const MaxMarketId: u32 = u32::MAX;
+    pub const MaxListingId: u32 = u32::MAX;
+}
+
+impl pallet_markets::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
 }
 
 impl crate::custom_header::AssetsStateRootProvider<sp_runtime::traits::BlakeTwo256> for Runtime {

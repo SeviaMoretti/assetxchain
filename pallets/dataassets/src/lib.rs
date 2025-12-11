@@ -389,7 +389,7 @@ pub mod pallet {
             let who = ensure_signed(origin)?;
             
             // 验证资产存在且属于调用者
-            let asset = Self::get_asset(&asset_id).ok_or(Error::<T>::AssetNotFound)?;
+            let mut asset = Self::get_asset(&asset_id).ok_or(Error::<T>::AssetNotFound)?;
             ensure!(asset.owner == who, Error::<T>::NotOwner);
             ensure!(!asset.is_locked(), Error::<T>::AssetLocked); // 锁定资产不允许改变授权状态
             ensure!(!asset.is_approved(), Error::<T>::AlreadyAuthorized); // 已被授权的资产不能再次授权
@@ -402,6 +402,11 @@ pub mod pallet {
             // 存储授权信息
             AssetApprovals::<T>::insert(&asset_id, &market_account);
             
+            // 修改资产状态
+            asset.status = AssetStatus::Approved;
+            asset.updated_at = Self::current_timestamp(); // 同步更新时间戳
+            Self::insert_asset(&asset_id, &asset)?; // 保存修改后的资产
+
             // 发出事件
             Self::deposit_event(Event::AssetAuthorized { 
                 asset_id, 
@@ -421,11 +426,16 @@ pub mod pallet {
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
             
-            let asset = Self::get_asset(&asset_id).ok_or(Error::<T>::AssetNotFound)?;
+            let mut asset = Self::get_asset(&asset_id).ok_or(Error::<T>::AssetNotFound)?;
             ensure!(asset.owner == who, Error::<T>::NotOwner);
             
             if AssetApprovals::<T>::contains_key(&asset_id) {
                 AssetApprovals::<T>::remove(&asset_id);
+
+                asset.status = AssetStatus::Private;
+                asset.updated_at = Self::current_timestamp(); // 同步更新时间戳
+                Self::insert_asset(&asset_id, &asset)?; // 保存修改后的资产
+
                 Self::deposit_event(Event::AuthorizationRevoked { 
                     asset_id, 
                     owner: who 
@@ -462,6 +472,7 @@ pub mod pallet {
             asset.nonce += 1;
             asset.transaction_count += 1;
             asset.updated_at = Self::current_timestamp();
+            asset.status = AssetStatus::Private;
             
             // 5. 更新资产树
             Self::insert_asset(&asset_id, &asset)?;
@@ -653,6 +664,8 @@ pub mod pallet {
             
             Ok(())
         }
+
+        // 转移权证的方法
     }
 
     impl<T: Config> Pallet<T> {

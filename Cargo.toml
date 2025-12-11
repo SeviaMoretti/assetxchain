@@ -13,7 +13,8 @@ members = [
     "pallets/rewards",
     "pallets/incentive",
     "pallets/shared_traits",
-    "runtime",
+    "runtime", 
+    "pallets/markets", "pallets/collaterals",
 ]
 resolver = "2"
 
@@ -23,6 +24,7 @@ pallet-template = { path = "./pallets/template", default-features = false }
 pallet-dataassets = { path = "./pallets/dataassets", default-features = false }
 pallet-rewards = { path = "./pallets/rewards", default-features = false }
 pallet-incentive = { path = "./pallets/incentive", default-features = false }
+pallet-markets = { path = "./pallets/markets", default-features = false }
 pallet-shared-traits = { path = "./pallets/shared_traits", default-features = false }
 clap = { version = "4.5.13" }
 frame-benchmarking-cli = { version = "47.0.0", default-features = false }
@@ -58,7 +60,7 @@ sp-runtime = { version = "41.1.0", default-features = false }
 sp-timestamp = { version = "36.0.0", default-features = false }
 substrate-frame-rpc-system = { version = "43.0.0", default-features = false }
 substrate-build-script-utils = { version = "11.0.0", default-features = false }
-codec = { version = "3.7.4", default-features = false, package = "parity-scale-codec" }
+codec = { version = "3.7.4", default-features = false, package = "parity-scale-codec", features = ["derive"] }
 frame-benchmarking = { version = "40.0.0", default-features = false }
 frame-executive = { version = "40.0.0", default-features = false }
 frame-support = { version = "40.1.0", default-features = false }
@@ -81,7 +83,7 @@ pallet-sudo = { version = "40.0.0", default-features = false }
 pallet-timestamp = { version = "39.0.0", default-features = false }
 pallet-vesting = { version = "40.1.0", default-features = false }
 pallet-transaction-payment-rpc-runtime-api = { version = "40.0.0", default-features = false }
-scale-info = { version = "2.11.6", default-features = false }
+scale-info = { version = "2.11.6", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0.132", default-features = false }
 sp-consensus-grandpa = { version = "23.1.0", default-features = false }
 sp-offchain = { version = "36.0.0", default-features = false }

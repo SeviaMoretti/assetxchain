@@ -1,5 +1,5 @@
 [package]
-name = "pallet-markets"
+name = "pallet-collaterals"
 version = "0.1.0"
 license.workspace = true
 authors.workspace = true

@@ -664,10 +664,10 @@ impl<T: Config> Pallet<T> {
     /// 2.4 重置月度统计数据
     fn reset_monthly_statistics() {
         // 使用clear替代remove_all
-        MarketMonthlyVolume::<T>::clear(u32::MAX, None);
-        TraderMonthlyVolume::<T>::clear(u32::MAX, None);
-        GovernanceVotingWeight::<T>::clear(u32::MAX, None);
-        Asset30dTradeCount::<T>::clear(u32::MAX, None);
+        let _ = MarketMonthlyVolume::<T>::clear(u32::MAX, None);
+        let _ = TraderMonthlyVolume::<T>::clear(u32::MAX, None);
+        let _ = GovernanceVotingWeight::<T>::clear(u32::MAX, None);
+        let _ = Asset30dTradeCount::<T>::clear(u32::MAX, None);
     }
 
     /// 3. 数据创建者：首次创建元证奖励（供dataassets模块调用）

@@ -1,7 +1,6 @@
 // 数据资产扩展模块
 // 与pallet-contracts交互，实现数据资产扩展，市场交易成功后，更新数据资产的状态
 
-use super::*;
 use log;
 use pallet_contracts::chain_extension::{
     ChainExtension, Environment, Ext, InitState, RetVal, SysConfig,
@@ -30,7 +29,7 @@ where
         let func_id = env.func_id();
         
         match func_id {
-            // Case 1: 交易元证
+            // 交易元证
             TRANSFER_ASSET_FUNC_ID => {
                 log::debug!(target: "runtime", "DataAssetsExtension: Calling TRANSFER_ASSET_FUNC_ID");
                 let mut env = env.buf_in_buf_out();
@@ -54,7 +53,7 @@ where
                 Ok(RetVal::Converging(0))
             },
             
-            // Case 2: 交易权证
+            // 交易权证
             TRANSFER_CERT_FUNC_ID => {
                 Ok(RetVal::Converging(0))
             }

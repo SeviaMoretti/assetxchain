@@ -379,7 +379,7 @@ pub mod pallet {
         }
 
         /// 授权资产给市场账户（或其他账户）
-        #[pallet::call_index(7)] // 确保索引号递增，不要重复
+        #[pallet::call_index(7)] // 索引号递增，不重复
         #[pallet::weight(10_000)]
         pub fn authorize_market(
             origin: OriginFor<T>,

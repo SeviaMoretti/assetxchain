@@ -90,16 +90,16 @@ pub trait MarketStandard {
     
     /// 投入市场,用户需要先调用can_list_asset检查资产是否允许交易,
     #[ink(message)]
-    fn asset_enter(&self, asset_id: [u8; 32]);
+    fn asset_enter(&mut self, asset_id: [u8; 32]);
 
     /// 退出市场,用户可以调用此方法退出市场,资产将返回用户
     #[ink(message)]
-    fn asset_leave(&self, asset_id: [u8; 32]);
+    fn asset_leave(&mut self, asset_id: [u8; 32]);
 
     /// 报告交易结果,用户需要调用此方法报告交易结果,
     /// 市场合约会根据交易结果更新资产状态
     #[ink(message)]
-    fn report_trade_result(&self, trade_id: [u8; 32], success: bool);
+    fn report_trade_result(&mut self, trade_id: [u8; 32], success: bool);
     // 注意：交易功能 (buy, list) 通常不放在标准 Trait 里强制要求同名，
     // 因为不同模式参数不同（拍卖需要起拍价、时间；一口价只需要价格）。
     // 这些通过前端适配或 ABI 解析来处理。

@@ -291,6 +291,7 @@ parameter_types! {
 	pub const InitialReward: Balance = 5 * UNIT;
     pub const RewardAdjustmentThreshold: Balance = 250_000_000 * UNIT;
     pub const AdjustedReward: Balance = 1 * UNIT; 
+    pub const MaxSupply: Balance = 500_000_000 * UNIT;
 }
 
 pub struct BlockAuthor;
@@ -308,6 +309,7 @@ impl pallet_rewards::Config for Runtime {
 	type InitialReward = InitialReward;
 	type RewardAdjustmentThreshold = RewardAdjustmentThreshold;
 	type AdjustedReward = AdjustedReward;
+    type MaxSupply = MaxSupply;
 }
 
 parameter_types! {
@@ -373,7 +375,7 @@ impl pallet_incentive::Config for Runtime {
 pub const CENTS: Balance = UNIT / 100; 
 pub const MILLICENTS: Balance = CENTS / 1_000;
 
-// 押金计算逻辑
+// 押金计算逻辑，这里的15和6使用的是硬编码，分别对应每个item和每个byte的押金
 pub const fn deposit(items: u32, bytes: u32) -> Balance {
     items as Balance * 15 * CENTS + (bytes as Balance) * 6 * CENTS
 }
@@ -407,7 +409,7 @@ impl frame_support::traits::Get<pallet_contracts::Schedule<Runtime>> for Contrac
 pub struct BabeRandomnessAdapter;
 impl frame_support::traits::Randomness<Hash, BlockNumber> for BabeRandomnessAdapter {
     fn random(subject: &[u8]) -> (Hash, BlockNumber) {
-        // 调用 Babe 的随机数，如果为空则返回默认 Hash (0x00...)
+        // 调用 Babe 的随机数，如果为空则返回默认Hash(0x00...)
         let (hash, block) = pallet_babe::ParentBlockRandomness::<Runtime>::random(subject);
         (hash.unwrap_or_default(), block)
     }

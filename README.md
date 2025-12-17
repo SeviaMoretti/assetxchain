@@ -230,3 +230,10 @@ the correct dependencies, activate direnv `direnv allow`.
 Please follow the [Substrate Docker instructions
 here](https://github.com/paritytech/polkadot-sdk/blob/master/substrate/docker/README.md) to
 build the Docker container with the Substrate Node Template binary.
+
+pallet-staking：用户质押 / 提名 → 选举出验证人集合；
+pallet-session：基于选举结果，生成新的会话（Epoch）验证人列表；
+pallet-babe：基于验证人权益和 VRF 随机数，分配每个 Slot 的出块权 → 生产区块；
+pallet-authorship：记录出块人 → 汇总区块奖励；
+pallet-grandpa：验证人对 BABE 生产的区块投票 → 确认最终性；
+pallet-staking/pallet-authorship：将奖励分配给出块人 / 提名者（部分通过 pallet-vesting 分期解锁）。

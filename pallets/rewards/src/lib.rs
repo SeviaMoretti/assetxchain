@@ -18,6 +18,7 @@ pub mod pallet {
 	use frame_support::pallet_prelude::*;
 	use frame_system::pallet_prelude::*;
 	use frame_support::traits::Currency;
+	use frame_support::sp_runtime::Saturating;
 
 	pub type BalanceOf<T> = <<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
 
@@ -41,6 +42,8 @@ pub mod pallet {
         type RewardAdjustmentThreshold: Get<BalanceOf<Self>>;
         #[pallet::constant]
         type AdjustedReward: Get<BalanceOf<Self>>;
+		#[pallet::constant]
+    	type MaxSupply: Get<BalanceOf<Self>>;
 	}
 
 	#[pallet::storage]
@@ -87,28 +90,40 @@ pub mod pallet {
 		fn on_finalize(block_number: BlockNumberFor<T>) {
 			// 获取当前已挖出的代币总量
 			let current_total = TotalTokensMined::<T>::get();
+			let max_supply = T::MaxSupply::get();
+			
+			// 检查是否已超最大供应量
+			if current_total >= max_supply {
+				return;
+			}
 
 			// 计算当前区块应发放的奖励（每次都判断：未达阈值发5，已达阈值发1）
-			let reward_amount = Self::calculate_current_reward(current_total);
+			let mut reward_amount = Self::calculate_current_reward(current_total);
 
-			// 计算发放后新的总量
-			let new_total = current_total.checked_add(&reward_amount)
-				.expect("奖励金额不会导致溢出"); // 实际场景可根据需求处理溢出
+			// 防止最后一笔奖励超出5亿上限
+			if current_total.saturating_add(reward_amount) > max_supply {
+				reward_amount = max_supply.saturating_sub(current_total);
+			}
 
 			// 发放奖励给接收者
 			let receiver = T::RewardReceiver::get();
-			// 发放奖励给接收者，显式忽略返回的Imbalance
+			// 发放奖励给接收者，忽略返回的Imbalance
 			let _ = T::Currency::deposit_creating(&receiver, reward_amount);
 
+			// 更新总量
+			let new_total = current_total.checked_add(&reward_amount)
+				.expect("奖励金额不会导致溢出"); // 实际场景可根据需求处理溢出
 			// 更新已挖出的代币总量
 			TotalTokensMined::<T>::put(new_total);
 
-			// 触发奖励发放事件
-			Self::deposit_event(Event::RewardPaid {
-				who: receiver.clone(),
-				amount: reward_amount,
-				block_number,
-			});
+			// 真给了区块奖励才发事件
+			if reward_amount > Zero::zero() {
+				Self::deposit_event(Event::RewardPaid {
+					who: receiver.clone(),
+					amount: reward_amount,
+					block_number,
+				});
+			}
 
 			// 若本次发放后首次达到阈值，触发奖励调整事件
 			if current_total < T::RewardAdjustmentThreshold::get() 

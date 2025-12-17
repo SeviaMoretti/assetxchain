@@ -23,9 +23,12 @@ pub mod pallet {
 
     use codec::{Encode, Decode, MaxEncodedLen, DecodeWithMemTracking};
     
-    // 计算 ink! trait 中 is_assetx_market 的 selector
-    // 此处假设为 [0x2A, 0x5F, 0x57, 0x6B]，实际开发需用 cargo-contract 计算
-    const SELECTOR_IS_MARKET: [u8; 4] = [0x2A, 0x5F, 0x57, 0x6B];
+    /// 函数选择器：对应ink!合约的is_assetx_market()方法
+    /// 生成方式：在合约项目中执行 `cargo contract metadata --json | jq '.V1.spec.messages[] | select(.name == "is_assetx_market") | .selector'`
+    /// 生产环境必须替换为实际生成的选择器，否则会导致调用失败
+    // ###应该将Selector放入 Config，在编译后的合约的metadata.json(target/ink/market_orderbook/market_orderbook.json)中查看
+    const SELECTOR_IS_MARKET: [u8; 4] = [0x26, 0x3e, 0x53, 0x34];
+    // 会添加多个Selector，约束市场创建者必须实现某些方法
 
     #[pallet::pallet]
     pub struct Pallet<T>(_);
@@ -111,26 +114,42 @@ pub mod pallet {
             
             // 调用合约的is_assetx_market方法验证市场是否符合标准
             let input_data = SELECTOR_IS_MARKET.to_vec();
+            // 应该估算合约调用所需gas（避免硬编码导致的gas不足或浪费）
             let gas_limit = Weight::from_parts(5_000_000_000, 256 * 1024);
 
             let result = pallet_contracts::Pallet::<T>::bare_call(
-                creator.clone(),          // 模拟调用者
-                contract_address.clone(), // 目标合约
-                0u32.into(),              // 转账 0
-                gas_limit,
-                None,
-                input_data,
-                DebugInfo::Skip,          // 改为 DebugInfo 类型
-                CollectEvents::Skip,
-                Determinism::Enforced,    // 改为 Enforced
+                creator.clone(),          // 调用者账号（这里是市场创建者）
+                contract_address.clone(), // 目标合约地址（要验证的合约）
+                0u32.into(),              // 随调用转账的金额（这里为 0，仅调用方法不转账）
+                gas_limit,                // 调用允许消耗的最大 gas（防止无限循环等问题）
+                None,                     // 盐值（用于创建合约时的确定性地址，此处调用已部署合约，为 None）
+                input_data,               // 输入数据（包含函数选择器，用于指定调用合约的哪个方法）
+                DebugInfo::Skip,          // 是否收集调试信息（此处跳过）
+                CollectEvents::Skip,      // 是否收集合约触发的事件（此处跳过）
+                Determinism::Enforced,    // 是否强制确定性执行（确保调用结果可复现）
             );
 
             // 检查返回值是否为 true (ink! bool true = 0x01)
+            // 验证调用结果（细化错误处理，明确失败原因）
             let verified = match result.result {
                 Ok(retval) => {
-                     !retval.flags.contains(ReturnFlags::REVERT) && 
-                     retval.data.len() >= 1 && 
-                     retval.data[0] == 1
+                    // 检查是否发生了 Revert
+                    if retval.flags.contains(ReturnFlags::REVERT) {
+                        false
+                    } else {
+                        // ink!的MessageResult编码结构是:
+                        // Ok(val) => 0x00 + Encoded(val)
+                        // Err(e)  => 0x01 + Encoded(e)
+                        
+                        // 尝试将返回数据解码为 Result<bool, _>
+                        let decoded_result: Result<Result<bool, u8>, _> = Decode::decode(&mut &retval.data[..]);
+                        
+                        match decoded_result {
+                            // 外层 Ok 代表解码成功，内层 Ok(true) 代表合约返回了 True
+                            Ok(Ok(true)) => true,
+                            _ => false,
+                        }
+                    }
                 },
                 Err(_) => false,
             };

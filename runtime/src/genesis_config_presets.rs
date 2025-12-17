@@ -73,7 +73,7 @@ fn testnet_genesis(
 					} else if k == incentive_pool {
 						(k, INCENTIVE_POOL_PERCENT)
 					} else {
-						(k, 1000 * UNIT)
+						(k, 5000 * UNIT)
 					}
 				})
 				.collect::<Vec<_>>(),

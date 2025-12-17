@@ -39,6 +39,7 @@ pallet-markets.workspace = true
 pallet-shared-traits.workspace = true
 pallet-timestamp.workspace = true
 pallet-vesting.workspace = true
+pallet-staking.workspace = true
 pallet-transaction-payment-rpc-runtime-api.workspace = true
 pallet-transaction-payment.workspace = true
 scale-info = { features = ["derive", "serde"], workspace = true }
@@ -101,6 +102,7 @@ std = [
 	"pallet-vesting/std",
 	"pallet-transaction-payment-rpc-runtime-api/std",
 	"pallet-transaction-payment/std",
+	"pallet-staking/std",
 	"scale-info/std",
 	"serde/std",
 	"serde_json/std",

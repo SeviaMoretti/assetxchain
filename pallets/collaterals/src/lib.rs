@@ -11,7 +11,6 @@ pub mod weights {
         fn unbond() -> Weight;
     }
 
-    // 占位符实现
     impl WeightInfo for () {
         fn pledge() -> Weight { Weight::from_parts(10_000_000, 0) }
         fn unbond() -> Weight { Weight::from_parts(10_000_000, 0) }
@@ -55,10 +54,10 @@ pub mod pallet {
     /// 质押角色枚举
     #[derive(Encode, Decode, Clone, Copy, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen, DecodeWithMemTracking)]
     pub enum CollateralRole {
-        DataCreator,        // 数据创建者
-        MarketOperator,     // 市场运营者
+        DataCreator,        // 数据提供者
+        MarketOperator,     // 市场创建者
         IpfsProvider,       // IPFS服务提供者
-        GovernancePledge,   // 治理参与者
+        GovernancePledge,   // 验证节点，这里这个角色没用，相关逻辑在validators_set-->pallet-staking
     }
 
     /// 质押详细信息结构体

@@ -37,6 +37,8 @@ pallet-rewards.workspace = true
 pallet-incentive.workspace = true
 pallet-markets.workspace = true
 pallet-shared-traits.workspace = true
+pallet-validator.workspace = true
+pallet-im-online.workspace = true
 pallet-timestamp.workspace = true
 pallet-vesting.workspace = true
 pallet-staking.workspace = true
@@ -98,6 +100,8 @@ std = [
 	"pallet-incentive/std",
 	"pallet-markets/std",
 	"pallet-shared-traits/std",
+	"pallet-validator/std",
+	"pallet-im-online/std",
 	"pallet-timestamp/std",
 	"pallet-vesting/std",
 	"pallet-transaction-payment-rpc-runtime-api/std",

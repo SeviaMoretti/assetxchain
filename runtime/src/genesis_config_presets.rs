@@ -73,7 +73,7 @@ fn testnet_genesis(
 					} else if k == incentive_pool {
 						(k, INCENTIVE_POOL_PERCENT)
 					} else {
-						(k, 5000 * UNIT)
+						(k, 50000 * UNIT)
 					}
 				})
 				.collect::<Vec<_>>(),
@@ -143,6 +143,14 @@ fn testnet_genesis(
 					FOUNDATION_PERCENT * 20 / 100,        // 第五年释放20%
 				),
 			],
+		},
+		validator: pallet_validator::GenesisConfig {
+			validators: initial_authorities
+				.iter()
+				.map(|x| x.0.clone()) // 提取初始验证者的账户ID
+				.collect::<Vec<_>>()
+				.try_into() // 转换为BoundedVec（处理长度超限错误）
+				.expect("初始验证者数量不超过MaxValidators"),
 		},
 	})
 }

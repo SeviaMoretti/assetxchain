@@ -118,14 +118,14 @@ pub mod pallet {
             let gas_limit = Weight::from_parts(5_000_000_000, 256 * 1024);
 
             let result = pallet_contracts::Pallet::<T>::bare_call(
-                creator.clone(),          // 调用者账号（这里是市场创建者）
+                creator.clone(),          // 调用者账号（市场创建者）
                 contract_address.clone(), // 目标合约地址（要验证的合约）
-                0u32.into(),              // 随调用转账的金额（这里为 0，仅调用方法不转账）
+                0u32.into(),              // 随调用转账的金额（这里为 0，调用方法不转账）
                 gas_limit,                // 调用允许消耗的最大 gas（防止无限循环等问题）
-                None,                     // 盐值（用于创建合约时的确定性地址，此处调用已部署合约，为 None）
+                None,                     // 盐值（用于创建合约时的确定性地址，调用已部署合约，None）
                 input_data,               // 输入数据（包含函数选择器，用于指定调用合约的哪个方法）
-                DebugInfo::Skip,          // 是否收集调试信息（此处跳过）
-                CollectEvents::Skip,      // 是否收集合约触发的事件（此处跳过）
+                DebugInfo::Skip,          // 是否收集调试信息（跳过）
+                CollectEvents::Skip,      // 是否收集合约触发的事件（跳过）
                 Determinism::Enforced,    // 是否强制确定性执行（确保调用结果可复现）
             );
 
@@ -137,15 +137,11 @@ pub mod pallet {
                     if retval.flags.contains(ReturnFlags::REVERT) {
                         false
                     } else {
-                        // ink!的MessageResult编码结构是:
-                        // Ok(val) => 0x00 + Encoded(val)
-                        // Err(e)  => 0x01 + Encoded(e)
-                        
-                        // 尝试将返回数据解码为 Result<bool, _>
+                        // 将返回数据解码为 Result<bool, _>
                         let decoded_result: Result<Result<bool, u8>, _> = Decode::decode(&mut &retval.data[..]);
                         
                         match decoded_result {
-                            // 外层 Ok 代表解码成功，内层 Ok(true) 代表合约返回了 True
+                            // 外层Ok代表解码成功，内层Ok(true)代表合约返回了True
                             Ok(Ok(true)) => true,
                             _ => false,
                         }

@@ -225,7 +225,7 @@ pub mod pallet {
             Self::insert_asset(&asset_id, &asset)?;
             Self::set_token_mapping(token_id, asset_id);
             Self::initialize_certificate_trie(&asset_id);
-            
+            // !!!!!!!!!!
             // 首次创建奖励发放(捕捉错误，不阻断业务)
             if let Err(_) = T::IncentiveHandler::distribute_first_create_reward(&who, &asset_id) {
                 log::error!("首次创建奖励发放失败：asset_id={:?}", asset_id);

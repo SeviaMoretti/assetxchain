@@ -46,9 +46,9 @@ use pallet_shared_traits::{IncentiveHandler, DataAssetProvider};
 // Local module imports
 use super::{
 	AccountId, Balance, Balances, Block, BlockNumber, Hash, Nonce, PalletInfo, Runtime,
-	RuntimeCall, RuntimeEvent, RuntimeFreezeReason, RuntimeHoldReason, RuntimeOrigin, RuntimeTask,
+	RuntimeCall, RuntimeEvent, RuntimeFreezeReason, RuntimeHoldReason, RuntimeOrigin, RuntimeTask, UncheckedExtrinsic,
 	System, EXISTENTIAL_DEPOSIT, SLOT_DURATION, VERSION, DAYS, HOURS, MILLI_SECS_PER_BLOCK,
-	Babe, SessionKeys, Vesting, DataAssets, Contracts,
+	Babe, SessionKeys, Vesting, DataAssets, Contracts, Validator,
 };
 use crate::{Incentive, UNIT, asset_market_extension};
 
@@ -120,7 +120,7 @@ parameter_types! {
 impl pallet_babe::Config for Runtime {
     type EpochDuration = EpochDuration;
     type ExpectedBlockTime = ExpectedBlockTime;
-    type EpochChangeTrigger = pallet_babe::SameAuthoritiesForever;
+    type EpochChangeTrigger = pallet_babe::ExternalTrigger;
     type DisabledValidators = (); //pallet_session::Pallet<Runtime>;
     type WeightInfo = ();
     type MaxAuthorities = frame_support::traits::ConstU32<32>;
@@ -142,7 +142,7 @@ impl pallet_session::Config for Runtime {
     type ValidatorIdOf = ValidatorIdOf;
     type ShouldEndSession = pallet_session::PeriodicSessions<Period, Offset>;
     type NextSessionRotation = pallet_session::PeriodicSessions<Period, Offset>;
-    type SessionManager = (); // 简化
+    type SessionManager = Validator;
     type SessionHandler = <SessionKeys as OpaqueKeys>::KeyTypeIdProviders;
     type Keys = SessionKeys;
     type WeightInfo = ();
@@ -483,6 +483,62 @@ parameter_types! {
 
 impl pallet_markets::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
+}
+
+parameter_types! {
+    pub const MinValidatorBond: Balance = 1_000 * UNIT; // 先质押1000DAT
+    pub const MaxValidators: u32 = 100;
+}
+
+impl pallet_validator::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type Currency = Balances;
+    type AddRemoveOrigin = frame_system::EnsureRoot<AccountId>; // 设为Root权限，开发者-->超级管理
+    type MinValidatorBond = MinValidatorBond;
+    type MaxValidators = MaxValidators;
+    type ValidatorIdOf = ValidatorIdOf; 
+    type IdentificationOf = ValidatorIdOf;
+}
+
+parameter_types! {
+    pub const UnsignedPriority: u64 = 1 << 20;
+}
+
+impl pallet_im_online::Config for Runtime {
+    type AuthorityId = sp_consensus_babe::AuthorityId;
+    type RuntimeEvent = RuntimeEvent;
+    type NextSessionRotation = pallet_session::PeriodicSessions<Period, Offset>;
+    // 将pallet_validator设为验证者集合提供者
+    type ValidatorSet = Validator; 
+    // 将pallet_validator设为违规报告接收者
+    type ReportUnresponsiveness = Validator; 
+    
+    type UnsignedPriority = UnsignedPriority;
+    type WeightInfo = pallet_im_online::weights::SubstrateWeight<Runtime>;
+    type MaxKeys = MaxValidators; // 使用定义的上限
+    type MaxPeerInHeartbeats = ConstU32<0>; // Solo Chain 模式下通常设为 0,测试网5-10
+}
+
+// 告诉系统如何为im-online的调用创建基本的交易结构
+impl frame_system::offchain::CreateTransactionBase<pallet_im_online::Call<Runtime>> for Runtime {
+    type RuntimeCall = RuntimeCall;
+    // 使用Block中定义的Extrinsic类型
+    type Extrinsic = UncheckedExtrinsic;
+}
+
+impl frame_system::offchain::CreateInherent<pallet_im_online::Call<Runtime>> for Runtime {
+    // 注意：这里的参数必须是 LocalCall 类型 (即 im_online 的 Call)
+    // 返回值必须是 Self::Extrinsic
+    fn create_inherent(call: RuntimeCall) -> Self::Extrinsic {
+        // 将 Pallet 特有的 Call 转换为全局 RuntimeCall
+        let runtime_call: RuntimeCall = call.into();
+        
+        // 使用 UncheckedExtrinsic::new_bare 包装
+        // Inherent 交易通常不需要签名 (Signature::None) 和 签名扩展 (Default::default)
+        sp_runtime::generic::UncheckedExtrinsic::new_bare(
+            runtime_call,
+        ).into()
+    }
 }
 
 impl crate::custom_header::AssetsStateRootProvider<sp_runtime::traits::BlakeTwo256> for Runtime {

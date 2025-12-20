@@ -266,4 +266,10 @@ mod runtime {
 	
 	#[runtime::pallet_index(15)]
     pub type Markets = pallet_markets;
+
+	#[runtime::pallet_index(16)]
+    pub type ImOnline = pallet_im_online;
+
+	#[runtime::pallet_index(17)]
+    pub type Validator = pallet_validator;
 }

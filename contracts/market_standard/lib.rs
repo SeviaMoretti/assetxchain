@@ -75,7 +75,7 @@ pub trait MarketStandard {
     #[ink(message)]
     fn get_market_type(&self) -> u8;
 
-    /// 获取当前交易费率(Basis Points,e.g., 30 = 0.3%)
+    /// 获取当前交易费率(Basis Points,30 = 0.3%)
     /// 用户和前端查询费率，防止隐形收费
     #[ink(message)]
     fn get_fee_ratio(&self) -> u32;

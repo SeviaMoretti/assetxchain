@@ -10,6 +10,7 @@ use frame_support::traits::{Currency, Get};
 use sp_runtime::traits::Saturating;
 use alloc::vec;
 use crate::Event;
+use crate::types::DataAsset;
 use frame_system::Config as SystemConfig;
 
 type RuntimeEventOf<T> = <T as SystemConfig>::RuntimeEvent;
@@ -51,27 +52,32 @@ mod benchmarks {
         frame_system::Pallet::<T>::reset_events();
         setup_user::<T>(caller.clone());
         
-        // let name = vec![0u8; n as usize];
-        // let description = vec![0u8; d as usize];
         let name = vec![0u8; T::MaxNameLength::get() as usize];
         let description = vec![0u8; T::MaxDescriptionLength::get() as usize];
         let raw_data_hash = H256::repeat_byte(1);
         let data_size_bytes = 1024 * 1024; // 1MB
 
+        // 1.显式设置时间戳
+        // 保证生成的 asset_id 是确定性的
+        let now = 1000u64; // 设置一个固定的时间值
+        pallet_timestamp::Pallet::<T>::set_timestamp(now.into());
+
         // 注册资产
-        let _ = DataAssets::<T>::register_asset(
+        DataAssets::<T>::register_asset(
             RawOrigin::Signed(caller.clone()).into(),
             name,
             description,
             raw_data_hash,
             data_size_bytes
-        );
-        let events = frame_system::Pallet::<T>::events();
-        let last_event = events.last().expect("AssetRegistered event expected");
+        ).unwrap(); // 确保调用成功
 
-        let asset_id = crate::LAST_ASSET_ID.with(|v| {
-            v.borrow().expect("asset id must be recorded")
-        });
+        // 重新计算 Asset ID
+        // 使用与lib.rs中完全相同的逻辑重新生成 ID，而不是依赖全局变量
+        let asset_id = DataAsset::<T::AccountId>::generate_asset_id(&caller, now, &raw_data_hash);
+        
+        // 验证资产确实存在
+        assert!(DataAssets::<T>::get_asset(&asset_id).is_some(), "Asset should exist");
+
         let new_owner: T::AccountId = account("new_owner", 0, 0);
 
         #[extrinsic_call]

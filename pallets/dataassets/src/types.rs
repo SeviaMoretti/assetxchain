@@ -506,3 +506,22 @@ impl<AccountId: Clone + Encode> RightToken<AccountId> {
         }
     }
 }
+
+impl<AccountId> DataAsset<AccountId> {
+    #[inline]
+    pub fn asset_id(&self) -> [u8; 32] { // 返回[]copy不是&[]
+        self.asset_id
+    }
+}
+
+impl<AccountId> RightToken<AccountId> {
+    #[inline]
+    pub fn certificate_id(&self) -> [u8; 32] {
+        self.certificate_id
+    }
+
+    #[inline]
+    pub fn parent_asset_id(&self) -> [u8; 32] {
+        self.parent_asset_id
+    }
+}

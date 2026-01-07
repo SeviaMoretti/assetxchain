@@ -27,6 +27,13 @@ mod tests;
 
 #[cfg(feature = "runtime-benchmarks")]
 mod benchmarking;
+#[cfg(feature = "runtime-benchmarks")]
+use core::cell::RefCell;
+#[cfg(feature = "runtime-benchmarks")]
+thread_local! {
+    pub static LAST_ASSET_ID: RefCell<Option<[u8; 32]>> = RefCell::new(None);
+}
+
 
 pub use collateral::BalanceOf;
 
@@ -204,6 +211,13 @@ pub mod pallet {
                 let total_uncapped = T::BaseCollateral::get()
                     .saturating_add(variable_collateral);
                 
+                #[cfg(feature = "runtime-benchmarks")]
+                {
+                    LAST_ASSET_ID.with(|v| {
+                        *v.borrow_mut() = Some(asset_id);
+                    });
+                }
+
                 // 发射超限提示事件
                 Self::deposit_event(Event::CollateralOverCappedHint {
                     asset_id,

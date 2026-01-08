@@ -33,6 +33,8 @@ pub mod pallet {
     #[pallet::pallet]
     pub struct Pallet<T>(_);
     
+    // 多源同构数据市场，市场类型得展示出来，只在智能合约里面就很鸡肋
+
     // 定义市场支持的资产类型，另一种资产类型在准入规则中限制、定义
     #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen, DecodeWithMemTracking)]
     pub enum MarketAssetType {

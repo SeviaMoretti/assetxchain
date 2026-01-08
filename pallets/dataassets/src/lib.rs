@@ -266,7 +266,7 @@ pub mod pallet {
             let current_time = Self::current_timestamp();
             
             // 使用 minimal 构造函数，没有修改issuer，市场只是代理
-            let mut certificate = RightToken::minimal(
+            let certificate = RightToken::minimal(
                 token_id,
                 right_type_enum,
                 holder.clone(),

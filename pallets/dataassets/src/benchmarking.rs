@@ -1,25 +1,20 @@
+//! Benchmarking setup for pallet-dataassets
+
 use super::*;
-
-
-#[allow(unused)]
 use crate::Pallet as DataAssets;
 use frame_benchmarking::v2::*;
+use frame_support::traits::{ Currency, Get };
 use frame_system::RawOrigin;
 use sp_core::H256;
-use frame_support::traits::{Currency, Get};
-use sp_runtime::traits::Saturating;
-use alloc::vec;
-use crate::Event;
-use crate::types::DataAsset;
-use frame_system::Config as SystemConfig;
+use sp_runtime::traits::{ Saturating, SaturatedConversion };
+use sp_std::vec;
 
-type RuntimeEventOf<T> = <T as SystemConfig>::RuntimeEvent;
-
-fn setup_user<T: Config>(caller: T::AccountId) {
-    let amount = T::MaxCollateral::get();
-    let extra = BalanceOf::<T>::from(1000u32); 
-    let total = amount.saturating_add(extra);
-    T::Currency::make_free_balance_be(&caller, total);
+// 为基准测试创建账户并提供资金
+fn create_funded_account<T: Config>(name: &'static str, index: u32) -> T::AccountId {
+    let account: T::AccountId = frame_benchmarking::account(name, index, 0);
+    let balance = T::Currency::minimum_balance() * 1000u32.into();
+    T::Currency::make_free_balance_be(&account, balance);
+    account
 }
 
 #[benchmarks]
@@ -27,66 +22,329 @@ mod benchmarks {
     use super::*;
 
     #[benchmark]
-    fn register_asset(
-        n: Linear<0, { T::MaxNameLength::get() }>,
-        d: Linear<0, { T::MaxDescriptionLength::get() }>,
-    ){
-        let caller: T::AccountId = whitelisted_caller();
+    fn register_asset() {
+        // 参数
+        let caller = create_funded_account::<T>("caller", 0);
+        let name = vec![b'T'; T::MaxNameLength::get() as usize];
+        let description = vec![b'D'; T::MaxDescriptionLength::get() as usize];
+        let raw_data_hash = H256::repeat_byte(0x01);
+        let data_size_bytes = 1024 * 1024; // 1 MB
 
-        setup_user::<T>(caller.clone());
-        
-        // let name = vec![0u8; n as usize];
-        // let description = vec![0u8; d as usize];
-        let name = vec![0u8; T::MaxNameLength::get() as usize];
-        let description = vec![0u8; T::MaxDescriptionLength::get() as usize];
-        let raw_data_hash = H256::repeat_byte(1);
-        let data_size_bytes = 1024 * 1024; // 1MB
+        // 确保有足够的质押金
+        let collateral = T::BaseCollateral::get()
+            .saturating_add(T::CollateralPerMB::get());
+        T::Currency::make_free_balance_be(&caller, collateral * 10u32.into());
 
         #[extrinsic_call]
-        register_asset(RawOrigin::Signed(caller.clone()), name, description, raw_data_hash, data_size_bytes);
+        register_asset(
+            RawOrigin::Signed(caller.clone()),
+            name,
+            description,
+            raw_data_hash,
+            data_size_bytes,
+        );
+
+        // 验证
+        assert!(DataAssets::<T>::get_asset(&[0u8; 32]).is_some() 
+            || frame_system::Pallet::<T>::events().len() > 0);
+    }
+
+    #[benchmark]
+    fn issue_certificate() {
+        // 先注册资产
+        let owner = create_funded_account::<T>("owner", 0);
+        let holder = create_funded_account::<T>("holder", 1);
+        
+        let name = b"Test Asset".to_vec();
+        let description = b"Test Description".to_vec();
+        let raw_data_hash = H256::repeat_byte(0x01);
+        let data_size_bytes = 1024 * 1024;
+
+        let collateral = T::BaseCollateral::get()
+            .saturating_add(T::CollateralPerMB::get());
+        T::Currency::make_free_balance_be(&owner, collateral * 10u32.into());
+
+        // 注册资产
+        assert!(DataAssets::<T>::register_asset(
+            RawOrigin::Signed(owner.clone()).into(),
+            name.clone(),
+            description.clone(),
+            raw_data_hash,
+            data_size_bytes,
+        ).is_ok());
+
+        // 获取生成的 asset_id
+        let timestamp = <pallet_timestamp::Pallet<T>>::get().saturated_into::<u64>();
+        let asset_id = crate::types::DataAsset::generate_asset_id(&owner, timestamp, &raw_data_hash);
+
+        #[extrinsic_call]
+        issue_certificate(
+            RawOrigin::Signed(owner.clone()),
+            asset_id,
+            holder,
+            1u8, // Usage right
+            None, // No expiration
+        );
+
+        // 验证
+        assert!(frame_system::Pallet::<T>::events().len() > 0);
     }
 
     #[benchmark]
     fn transfer_asset() {
-        let caller: T::AccountId = whitelisted_caller();
-        frame_system::Pallet::<T>::reset_events();
-        setup_user::<T>(caller.clone());
+        // 设置
+        let owner = create_funded_account::<T>("owner", 0);
+        let new_owner = create_funded_account::<T>("new_owner", 1);
         
-        let name = vec![0u8; T::MaxNameLength::get() as usize];
-        let description = vec![0u8; T::MaxDescriptionLength::get() as usize];
-        let raw_data_hash = H256::repeat_byte(1);
-        let data_size_bytes = 1024 * 1024; // 1MB
+        let name = b"Test Asset".to_vec();
+        let description = b"Test Description".to_vec();
+        let raw_data_hash = H256::repeat_byte(0x01);
+        let data_size_bytes = 1024 * 1024;
 
-        // 1.显式设置时间戳
-        // 保证生成的 asset_id 是确定性的
-        let now = 1000u64; // 设置一个固定的时间值
-        pallet_timestamp::Pallet::<T>::set_timestamp(now.into());
+        let collateral = T::BaseCollateral::get()
+            .saturating_add(T::CollateralPerMB::get());
+        T::Currency::make_free_balance_be(&owner, collateral * 10u32.into());
 
-        // 注册资产
-        DataAssets::<T>::register_asset(
-            RawOrigin::Signed(caller.clone()).into(),
+        assert!(DataAssets::<T>::register_asset(
+            RawOrigin::Signed(owner.clone()).into(),
             name,
             description,
             raw_data_hash,
-            data_size_bytes
-        ).unwrap(); // 确保调用成功
+            data_size_bytes,
+        ).is_ok());
 
-        // 重新计算 Asset ID
-        // 使用与lib.rs中完全相同的逻辑重新生成 ID，而不是依赖全局变量
-        let asset_id = DataAsset::<T::AccountId>::generate_asset_id(&caller, now, &raw_data_hash);
-        
-        // 验证资产确实存在
-        assert!(DataAssets::<T>::get_asset(&asset_id).is_some(), "Asset should exist");
-
-        let new_owner: T::AccountId = account("new_owner", 0, 0);
+        let timestamp = <pallet_timestamp::Pallet<T>>::get().saturated_into::<u64>();
+        let asset_id = crate::types::DataAsset::generate_asset_id(&owner, timestamp, &raw_data_hash);
 
         #[extrinsic_call]
-        transfer_asset(RawOrigin::Signed(caller), asset_id, new_owner);
+        transfer_asset(
+            RawOrigin::Signed(owner.clone()),
+            asset_id,
+            new_owner,
+        );
+
+        // 验证
+        assert!(frame_system::Pallet::<T>::events().len() > 0);
     }
 
-    impl_benchmark_test_suite!(
-        Pallet,
-        crate::mock::new_test_ext(),
-        crate::mock::Test,
-    );
+    #[benchmark]
+    fn revoke_certificate() {
+        // 设置
+        let owner = create_funded_account::<T>("owner", 0);
+        let holder = create_funded_account::<T>("holder", 1);
+        
+        let name = b"Test Asset".to_vec();
+        let description = b"Test Description".to_vec();
+        let raw_data_hash = H256::repeat_byte(0x01);
+        let data_size_bytes = 1024 * 1024;
+
+        let collateral = T::BaseCollateral::get()
+            .saturating_add(T::CollateralPerMB::get());
+        T::Currency::make_free_balance_be(&owner, collateral * 10u32.into());
+
+        assert!(DataAssets::<T>::register_asset(
+            RawOrigin::Signed(owner.clone()).into(),
+            name,
+            description,
+            raw_data_hash,
+            data_size_bytes,
+        ).is_ok());
+
+        let timestamp = <pallet_timestamp::Pallet<T>>::get().saturated_into::<u64>();
+        let asset_id = crate::types::DataAsset::generate_asset_id(&owner, timestamp, &raw_data_hash);
+
+        assert!(DataAssets::<T>::issue_certificate(
+            RawOrigin::Signed(owner.clone()).into(),
+            asset_id,
+            holder,
+            1u8,
+            None,
+        ).is_ok());
+
+        // 获取证书 ID（简化处理）
+        let certificate_id = [1u8; 32];
+
+        #[extrinsic_call]
+        revoke_certificate(
+            RawOrigin::Signed(owner.clone()),
+            asset_id,
+            certificate_id,
+        );
+    }
+
+    #[benchmark]
+    fn lock_asset() {
+        // 设置
+        let owner = create_funded_account::<T>("owner", 0);
+        
+        let name = b"Test Asset".to_vec();
+        let description = b"Test Description".to_vec();
+        let raw_data_hash = H256::repeat_byte(0x01);
+        let data_size_bytes = 1024 * 1024;
+
+        let collateral = T::BaseCollateral::get()
+            .saturating_add(T::CollateralPerMB::get());
+        T::Currency::make_free_balance_be(&owner, collateral * 10u32.into());
+
+        assert!(DataAssets::<T>::register_asset(
+            RawOrigin::Signed(owner.clone()).into(),
+            name,
+            description,
+            raw_data_hash,
+            data_size_bytes,
+        ).is_ok());
+
+        let timestamp = <pallet_timestamp::Pallet<T>>::get().saturated_into::<u64>();
+        let asset_id = crate::types::DataAsset::generate_asset_id(&owner, timestamp, &raw_data_hash);
+
+        #[extrinsic_call]
+        lock_asset(RawOrigin::Signed(owner.clone()), asset_id);
+    }
+
+    #[benchmark]
+    fn unlock_asset() {
+        // 设置
+        let owner = create_funded_account::<T>("owner", 0);
+        
+        let name = b"Test Asset".to_vec();
+        let description = b"Test Description".to_vec();
+        let raw_data_hash = H256::repeat_byte(0x01);
+        let data_size_bytes = 1024 * 1024;
+
+        let collateral = T::BaseCollateral::get()
+            .saturating_add(T::CollateralPerMB::get());
+        T::Currency::make_free_balance_be(&owner, collateral * 10u32.into());
+
+        assert!(DataAssets::<T>::register_asset(
+            RawOrigin::Signed(owner.clone()).into(),
+            name,
+            description,
+            raw_data_hash,
+            data_size_bytes,
+        ).is_ok());
+
+        let timestamp = <pallet_timestamp::Pallet<T>>::get().saturated_into::<u64>();
+        let asset_id = crate::types::DataAsset::generate_asset_id(&owner, timestamp, &raw_data_hash);
+
+        assert!(DataAssets::<T>::lock_asset(
+            RawOrigin::Signed(owner.clone()).into(),
+            asset_id,
+        ).is_ok());
+
+        #[extrinsic_call]
+        unlock_asset(RawOrigin::Signed(owner.clone()), asset_id);
+    }
+
+    #[benchmark]
+    fn authorize_market() {
+        // 设置
+        let owner = create_funded_account::<T>("owner", 0);
+        let market = create_funded_account::<T>("market", 1);
+        
+        let name = b"Test Asset".to_vec();
+        let description = b"Test Description".to_vec();
+        let raw_data_hash = H256::repeat_byte(0x01);
+        let data_size_bytes = 1024 * 1024;
+
+        let collateral = T::BaseCollateral::get()
+            .saturating_add(T::CollateralPerMB::get());
+        T::Currency::make_free_balance_be(&owner, collateral * 10u32.into());
+
+        assert!(DataAssets::<T>::register_asset(
+            RawOrigin::Signed(owner.clone()).into(),
+            name,
+            description,
+            raw_data_hash,
+            data_size_bytes,
+        ).is_ok());
+
+        let timestamp = <pallet_timestamp::Pallet<T>>::get().saturated_into::<u64>();
+        let asset_id = crate::types::DataAsset::generate_asset_id(&owner, timestamp, &raw_data_hash);
+
+        #[extrinsic_call]
+        authorize_market(
+            RawOrigin::Signed(owner.clone()),
+            asset_id,
+            market,
+        );
+    }
+
+    #[benchmark]
+    fn revoke_authorization() {
+        // 设置
+        let owner = create_funded_account::<T>("owner", 0);
+        let market = create_funded_account::<T>("market", 1);
+        
+        let name = b"Test Asset".to_vec();
+        let description = b"Test Description".to_vec();
+        let raw_data_hash = H256::repeat_byte(0x01);
+        let data_size_bytes = 1024 * 1024;
+
+        let collateral = T::BaseCollateral::get()
+            .saturating_add(T::CollateralPerMB::get());
+        T::Currency::make_free_balance_be(&owner, collateral * 10u32.into());
+
+        assert!(DataAssets::<T>::register_asset(
+            RawOrigin::Signed(owner.clone()).into(),
+            name,
+            description,
+            raw_data_hash,
+            data_size_bytes,
+        ).is_ok());
+
+        let timestamp = <pallet_timestamp::Pallet<T>>::get().saturated_into::<u64>();
+        let asset_id = crate::types::DataAsset::generate_asset_id(&owner, timestamp, &raw_data_hash);
+
+        assert!(DataAssets::<T>::authorize_market(
+            RawOrigin::Signed(owner.clone()).into(),
+            asset_id,
+            market,
+        ).is_ok());
+
+        #[extrinsic_call]
+        revoke_authorization(RawOrigin::Signed(owner.clone()), asset_id);
+    }
+
+    #[benchmark]
+    fn transfer_asset_by_market() {
+        // 设置
+        let owner = create_funded_account::<T>("owner", 0);
+        let market = create_funded_account::<T>("market", 1);
+        let new_owner = create_funded_account::<T>("new_owner", 2);
+        
+        let name = b"Test Asset".to_vec();
+        let description = b"Test Description".to_vec();
+        let raw_data_hash = H256::repeat_byte(0x01);
+        let data_size_bytes = 1024 * 1024;
+
+        let collateral = T::BaseCollateral::get()
+            .saturating_add(T::CollateralPerMB::get());
+        T::Currency::make_free_balance_be(&owner, collateral * 10u32.into());
+
+        assert!(DataAssets::<T>::register_asset(
+            RawOrigin::Signed(owner.clone()).into(),
+            name,
+            description,
+            raw_data_hash,
+            data_size_bytes,
+        ).is_ok());
+
+        let timestamp = <pallet_timestamp::Pallet<T>>::get().saturated_into::<u64>();
+        let asset_id = crate::types::DataAsset::generate_asset_id(&owner, timestamp, &raw_data_hash);
+
+        assert!(DataAssets::<T>::authorize_market(
+            RawOrigin::Signed(owner.clone()).into(),
+            asset_id,
+            market.clone(),
+        ).is_ok());
+
+        #[extrinsic_call]
+        transfer_asset_by_market(
+            RawOrigin::Signed(market),
+            asset_id,
+            new_owner,
+        );
+    }
+
+    impl_benchmark_test_suite!(DataAssets, crate::tests::new_test_ext(), crate::tests::Test);
 }

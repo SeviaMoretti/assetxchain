@@ -34,7 +34,7 @@ use core::marker::PhantomData;
 
 /// Weight functions for `pallet_dataassets`.
 pub struct WeightInfo<T>(PhantomData<T>);
-impl<T: frame_system::Config> pallet_dataassets::WeightInfo for WeightInfo<T> {
+impl<T: frame_system::Config> crate::pallet::WeightInfo for WeightInfo<T> {
 	/// Storage: `Timestamp::Now` (r:1 w:0)
 	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
 	/// Storage: `System::Account` (r:1 w:1)

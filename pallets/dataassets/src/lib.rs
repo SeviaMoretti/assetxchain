@@ -53,6 +53,18 @@ pub mod pallet {
     const CERTIFICATE_TRIE_PREFIX: &[u8] = b":certificate_trie:";
     const METADATA_PREFIX: &[u8] = b"_metadata/";
 
+    pub trait WeightInfo {
+        fn register_asset() -> Weight;
+        fn issue_certificate() -> Weight;
+        fn transfer_asset() -> Weight;
+        fn revoke_certificate() -> Weight;
+        fn lock_asset() -> Weight;
+        fn unlock_asset() -> Weight;
+        fn slash_collateral() -> Weight;
+        fn authorize_operator() -> Weight;
+        fn revoke_authorization() -> Weight;
+    }
+
     #[pallet::pallet]
     pub struct Pallet<T>(_);
 
@@ -83,7 +95,7 @@ pub mod pallet {
 
         /// Incentive handler trait
         type IncentiveHandler: IncentiveHandler<Self::AccountId, [u8; 32], BalanceOf<Self>>;
-        type WeightInfo: crate::weights::WeightInfo;
+        type WeightInfo: WeightInfo;
     }
 
     /// Storage for asset collateral information

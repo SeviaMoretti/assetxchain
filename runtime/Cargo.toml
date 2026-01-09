@@ -39,7 +39,6 @@ pallet-markets.workspace = true
 pallet-shared-traits.workspace = true
 pallet-timestamp.workspace = true
 pallet-vesting.workspace = true
-pallet-staking.workspace = true
 pallet-transaction-payment-rpc-runtime-api.workspace = true
 pallet-transaction-payment.workspace = true
 scale-info = { features = ["derive", "serde"], workspace = true }
@@ -58,6 +57,7 @@ sp-session.workspace = true
 sp-storage.workspace = true
 sp-transaction-pool.workspace = true
 sp-version = { features = ["serde"], workspace = true }
+staging-xcm-builder = { workspace = true }
 serde = { features = ["alloc", "derive",], optional = true, workspace = true}
 log = { workspace = true }
 hex-literal = { workspace = true }
@@ -102,7 +102,6 @@ std = [
 	"pallet-vesting/std",
 	"pallet-transaction-payment-rpc-runtime-api/std",
 	"pallet-transaction-payment/std",
-	"pallet-staking/std",
 	"scale-info/std",
 	"serde/std",
 	"serde_json/std",
@@ -139,6 +138,7 @@ runtime-benchmarks = [
 	"pallet-vesting/runtime-benchmarks",
 	"pallet-transaction-payment/runtime-benchmarks",
 	"sp-runtime/runtime-benchmarks",
+	"staging-xcm-builder/runtime-benchmarks",
 ]
 
 try-runtime = [

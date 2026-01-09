@@ -260,6 +260,7 @@ impl pallet_dataassets::Config for Runtime {
     type MaxDescriptionLength = ConstU32<1024>;
 
     type IncentiveHandler = Incentive;
+    type WeightInfo = pallet_dataassets::weights::SubstrateWeight<Runtime>;
 }
 
 // 添加参数配置

@@ -137,7 +137,7 @@ pub fn run() -> sc_cli::Result<()> {
 						let db = backend.expose_db();
 						let storage = backend.expose_storage();
 
-						cmd.run(config, client, db, storage)
+						cmd.run(config, client, db, storage, None)
 					},
 					BenchmarkCmd::Overhead(cmd) => {
 						let PartialComponents { client, .. } = service::new_partial(&config)?;
@@ -178,7 +178,7 @@ pub fn run() -> sc_cli::Result<()> {
 		None => {
 			let runner = cli.create_runner(&cli.run)?;
 			runner.run_node_until_exit(|config| async move {
-				match config.network.network_backend.unwrap_or_default() {
+				match config.network.network_backend {
 					sc_network::config::NetworkBackendType::Libp2p => service::new_full::<
 						sc_network::NetworkWorker<
 							solochain_template_runtime::opaque::Block,

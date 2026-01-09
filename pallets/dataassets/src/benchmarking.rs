@@ -150,9 +150,11 @@ mod benchmarks {
             data_size_bytes,
         ).is_ok());
 
+        // 关键：在 issue_certificate 之前获取时间戳，确保一致性
         let timestamp = <pallet_timestamp::Pallet<T>>::get().saturated_into::<u64>();
         let asset_id = crate::types::DataAsset::generate_asset_id(&owner, timestamp, &raw_data_hash);
 
+        // 在同一时间点发证
         assert!(DataAssets::<T>::issue_certificate(
             RawOrigin::Signed(owner.clone()).into(),
             asset_id,
@@ -161,13 +163,15 @@ mod benchmarks {
             None,
         ).is_ok());
 
-        // 生成正确的 certificate_id (与 RightToken::minimal 中的逻辑一致)
-        let token_id = 0u32; // 第一个证书的 token_id 是 0
-        let current_time = <pallet_timestamp::Pallet<T>>::get().saturated_into::<u64>();
+        // 生成正确的 certificate_id
+        // 根据 lib.rs 中 issue_certificate 的实现：
+        // - 使用 current_time (当前时间戳)
+        // - 使用 asset.owner 作为 issuer (不是 holder!)
+        // - RightToken::minimal 内部调用 generate_certificate_id(&parent_asset_id, current_time, &issuer)
         let certificate_id = crate::types::RightToken::<T::AccountId>::generate_certificate_id(
             &asset_id,
-            current_time,
-            &holder,
+            timestamp,  // 使用同一个时间戳
+            &owner,     // 使用 owner 作为 issuer (不是 holder!)
         );
 
         #[extrinsic_call]

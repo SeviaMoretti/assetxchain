@@ -63,6 +63,8 @@ sp-version = { features = ["serde"], workspace = true }
 serde = { features = ["alloc", "derive",], optional = true, workspace = true}
 log = { workspace = true }
 hex-literal = { workspace = true }
+staging-xcm-builder = { workspace = true }
+sp-staking = { workspace = true }
 
 [build-dependencies]
 substrate-wasm-builder = { optional = true, workspace = true, default-features = true }
@@ -129,12 +131,23 @@ std = [
 
 runtime-benchmarks = [
 	"frame-benchmarking/runtime-benchmarks",
+	"frame-support/runtime-benchmarks",
+	"frame-system-benchmarking/runtime-benchmarks",
 	"frame-system/runtime-benchmarks",
 	"pallet-balances/runtime-benchmarks",
+	"pallet-grandpa/runtime-benchmarks",
 	"pallet-sudo/runtime-benchmarks",
 	"pallet-template/runtime-benchmarks",
 	"pallet-dataassets/runtime-benchmarks",
+	"pallet-rewards/runtime-benchmarks",
+	"pallet-incentive/runtime-benchmarks",
 	"pallet-timestamp/runtime-benchmarks",
+	"pallet-vesting/runtime-benchmarks",
+	"pallet-transaction-payment/runtime-benchmarks",
+	"sp-runtime/runtime-benchmarks",
+	"staging-xcm-builder/runtime-benchmarks",
+	"sp-staking/runtime-benchmarks",
+	"pallet-staking/runtime-benchmarks",
 ]
 
 try-runtime = [

@@ -10721,9 +10721,11 @@ dependencies = [
  "sp-offchain",
  "sp-runtime",
  "sp-session",
+ "sp-staking",
  "sp-storage",
  "sp-transaction-pool",
  "sp-version",
+ "staging-xcm-builder",
  "substrate-wasm-builder",
 ]
 

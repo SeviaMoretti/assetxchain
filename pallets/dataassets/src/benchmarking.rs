@@ -150,19 +150,29 @@ mod benchmarks {
             data_size_bytes,
         ).is_ok());
 
+        // 关键：在 issue_certificate 之前获取时间戳，确保一致性
         let timestamp = <pallet_timestamp::Pallet<T>>::get().saturated_into::<u64>();
         let asset_id = crate::types::DataAsset::generate_asset_id(&owner, timestamp, &raw_data_hash);
 
+        // 在同一时间点发证
         assert!(DataAssets::<T>::issue_certificate(
             RawOrigin::Signed(owner.clone()).into(),
             asset_id,
-            holder,
+            holder.clone(),
             1u8,
             None,
         ).is_ok());
 
-        // 获取证书 ID（简化处理）
-        let certificate_id = [1u8; 32];
+        // 生成正确的 certificate_id
+        // 根据 lib.rs 中 issue_certificate 的实现：
+        // - 使用 current_time (当前时间戳)
+        // - 使用 asset.owner 作为 issuer (不是 holder!)
+        // - RightToken::minimal 内部调用 generate_certificate_id(&parent_asset_id, current_time, &issuer)
+        let certificate_id = crate::types::RightToken::<T::AccountId>::generate_certificate_id(
+            &asset_id,
+            timestamp,  // 使用同一个时间戳
+            &owner,     // 使用 owner 作为 issuer (不是 holder!)
+        );
 
         #[extrinsic_call]
         revoke_certificate(
@@ -235,8 +245,41 @@ mod benchmarks {
         unlock_asset(RawOrigin::Signed(owner.clone()), asset_id);
     }
 
+    // ⚠️ 修复：使用正确的函数名 slash_asset_collateral
     #[benchmark]
-    fn authorize_market() {
+    fn slash_collateral() {
+        // 设置
+        let owner = create_funded_account::<T>("owner", 0);
+        
+        let name = b"Test Asset".to_vec();
+        let description = b"Test Description".to_vec();
+        let raw_data_hash = H256::repeat_byte(0x01);
+        let data_size_bytes = 1024 * 1024;
+
+        let collateral = T::BaseCollateral::get()
+            .saturating_add(T::CollateralPerMB::get());
+        T::Currency::make_free_balance_be(&owner, collateral * 10u32.into());
+
+        assert!(DataAssets::<T>::register_asset(
+            RawOrigin::Signed(owner.clone()).into(),
+            name,
+            description,
+            raw_data_hash,
+            data_size_bytes,
+        ).is_ok());
+
+        let timestamp = <pallet_timestamp::Pallet<T>>::get().saturated_into::<u64>();
+        let asset_id = crate::types::DataAsset::generate_asset_id(&owner, timestamp, &raw_data_hash);
+
+        let slash_percentage = 50u8;
+
+        #[extrinsic_call]
+        slash_asset_collateral(RawOrigin::Root, asset_id, slash_percentage);
+    }
+
+    // ⚠️ 修复：使用正确的函数名 authorize_market
+    #[benchmark]
+    fn authorize_operator() {
         // 设置
         let owner = create_funded_account::<T>("owner", 0);
         let market = create_funded_account::<T>("market", 1);
@@ -303,47 +346,6 @@ mod benchmarks {
 
         #[extrinsic_call]
         revoke_authorization(RawOrigin::Signed(owner.clone()), asset_id);
-    }
-
-    #[benchmark]
-    fn transfer_asset_by_market() {
-        // 设置
-        let owner = create_funded_account::<T>("owner", 0);
-        let market = create_funded_account::<T>("market", 1);
-        let new_owner = create_funded_account::<T>("new_owner", 2);
-        
-        let name = b"Test Asset".to_vec();
-        let description = b"Test Description".to_vec();
-        let raw_data_hash = H256::repeat_byte(0x01);
-        let data_size_bytes = 1024 * 1024;
-
-        let collateral = T::BaseCollateral::get()
-            .saturating_add(T::CollateralPerMB::get());
-        T::Currency::make_free_balance_be(&owner, collateral * 10u32.into());
-
-        assert!(DataAssets::<T>::register_asset(
-            RawOrigin::Signed(owner.clone()).into(),
-            name,
-            description,
-            raw_data_hash,
-            data_size_bytes,
-        ).is_ok());
-
-        let timestamp = <pallet_timestamp::Pallet<T>>::get().saturated_into::<u64>();
-        let asset_id = crate::types::DataAsset::generate_asset_id(&owner, timestamp, &raw_data_hash);
-
-        assert!(DataAssets::<T>::authorize_market(
-            RawOrigin::Signed(owner.clone()).into(),
-            asset_id,
-            market.clone(),
-        ).is_ok());
-
-        #[extrinsic_call]
-        transfer_asset_by_market(
-            RawOrigin::Signed(market),
-            asset_id,
-            new_owner,
-        );
     }
 
     impl_benchmark_test_suite!(DataAssets, crate::tests::new_test_ext(), crate::tests::Test);

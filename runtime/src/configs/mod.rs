@@ -260,6 +260,7 @@ impl pallet_dataassets::Config for Runtime {
     type MaxDescriptionLength = ConstU32<1024>;
 
     type IncentiveHandler = Incentive;
+    type WeightInfo = pallet_dataassets::weights::WeightInfo<Runtime>;
 }
 
 // 添加参数配置
@@ -527,17 +528,17 @@ impl frame_system::offchain::CreateTransactionBase<pallet_im_online::Call<Runtim
 }
 
 impl frame_system::offchain::CreateInherent<pallet_im_online::Call<Runtime>> for Runtime {
-    // 注意：这里的参数必须是 LocalCall 类型 (即 im_online 的 Call)
-    // 返回值必须是 Self::Extrinsic
-    fn create_inherent(call: RuntimeCall) -> Self::Extrinsic {
-        // 将 Pallet 特有的 Call 转换为全局 RuntimeCall
-        let runtime_call: RuntimeCall = call.into();
-        
-        // 使用 UncheckedExtrinsic::new_bare 包装
-        // Inherent 交易通常不需要签名 (Signature::None) 和 签名扩展 (Default::default)
+    
+    fn create_bare(call: RuntimeCall) -> Self::Extrinsic {
+
+        // new_bare 接收的是 RuntimeCall
         sp_runtime::generic::UncheckedExtrinsic::new_bare(
-            runtime_call,
+            call
         ).into()
+    }
+
+    fn create_inherent(call: RuntimeCall) -> Self::Extrinsic {
+        Self::create_bare(call)
     }
 }
 

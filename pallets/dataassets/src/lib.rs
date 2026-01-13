@@ -22,6 +22,9 @@ pub mod types;
 pub mod digest_item;
 pub mod collateral;
 
+pub mod weights;
+pub use weights::WeightInfo;
+
 #[cfg(test)]
 mod tests;
 
@@ -49,6 +52,18 @@ pub mod pallet {
     const ASSET_TRIE_ID: &[u8] = b":asset_trie:";
     const CERTIFICATE_TRIE_PREFIX: &[u8] = b":certificate_trie:";
     const METADATA_PREFIX: &[u8] = b"_metadata/";
+
+    pub trait WeightInfo {
+        fn register_asset() -> Weight;
+        fn issue_certificate() -> Weight;
+        fn transfer_asset() -> Weight;
+        fn revoke_certificate() -> Weight;
+        fn lock_asset() -> Weight;
+        fn unlock_asset() -> Weight;
+        fn slash_collateral() -> Weight;
+        fn authorize_operator() -> Weight;
+        fn revoke_authorization() -> Weight;
+    }
 
     #[pallet::pallet]
     pub struct Pallet<T>(_);
@@ -80,6 +95,7 @@ pub mod pallet {
 
         /// Incentive handler trait
         type IncentiveHandler: IncentiveHandler<Self::AccountId, [u8; 32], BalanceOf<Self>>;
+        type WeightInfo: WeightInfo;
     }
 
     /// Storage for asset collateral information
@@ -169,7 +185,7 @@ pub mod pallet {
     #[pallet::call]
     impl<T: Config> Pallet<T> {
         #[pallet::call_index(0)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(<T as Config>::WeightInfo::register_asset())]
         pub fn register_asset(
             origin: OriginFor<T>,
             name: Vec<u8>,
@@ -203,7 +219,7 @@ pub mod pallet {
                     .saturating_mul(data_size_mb.saturated_into());
                 let total_uncapped = T::BaseCollateral::get()
                     .saturating_add(variable_collateral);
-
+                
                 // 发射超限提示事件
                 Self::deposit_event(Event::CollateralOverCappedHint {
                     asset_id,
@@ -225,7 +241,7 @@ pub mod pallet {
             Self::insert_asset(&asset_id, &asset)?;
             Self::set_token_mapping(token_id, asset_id);
             Self::initialize_certificate_trie(&asset_id);
-            // !!!!!!!!!!
+            
             // 首次创建奖励发放(捕捉错误，不阻断业务)
             if let Err(_) = T::IncentiveHandler::distribute_first_create_reward(&who, &asset_id) {
                 log::error!("首次创建奖励发放失败：asset_id={:?}", asset_id);
@@ -238,7 +254,7 @@ pub mod pallet {
         // ！！！！！！！！！！由于双层状态树不使用了，所以需要重新实现，并且发行权证的费用要覆盖权证行权的费用
         // !!!!!!!!!!!!发行权证，交易的发起者要么是资产所有者，要么是被授权的市场账户
         #[pallet::call_index(1)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(<T as Config>::WeightInfo::issue_certificate())]
         pub fn issue_certificate(
             origin: OriginFor<T>,
             asset_id: [u8; 32],
@@ -266,7 +282,7 @@ pub mod pallet {
             let current_time = Self::current_timestamp();
             
             // 使用 minimal 构造函数，没有修改issuer，市场只是代理
-            let certificate = RightToken::minimal(
+            let mut certificate = RightToken::minimal(
                 token_id,
                 right_type_enum,
                 holder.clone(),
@@ -285,7 +301,7 @@ pub mod pallet {
         }
 
         #[pallet::call_index(2)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(<T as Config>::WeightInfo::transfer_asset())]
         pub fn transfer_asset(
             origin: OriginFor<T>,
             asset_id: [u8; 32],
@@ -311,7 +327,7 @@ pub mod pallet {
         }
 
         #[pallet::call_index(3)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(<T as Config>::WeightInfo::revoke_certificate())]
         pub fn revoke_certificate(
             origin: OriginFor<T>,
             asset_id: [u8; 32],
@@ -333,7 +349,7 @@ pub mod pallet {
         }
 
         #[pallet::call_index(4)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(<T as Config>::WeightInfo::lock_asset())]
         pub fn lock_asset(origin: OriginFor<T>, asset_id: [u8; 32]) -> DispatchResult {
             let who = ensure_signed(origin)?;
             // let caller = Self::account_to_h160(&who);
@@ -350,7 +366,7 @@ pub mod pallet {
         }
 
         #[pallet::call_index(5)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(<T as Config>::WeightInfo::unlock_asset())]
         pub fn unlock_asset(origin: OriginFor<T>, asset_id: [u8; 32]) -> DispatchResult {
             let who = ensure_signed(origin)?;
             // let caller = Self::account_to_h160(&who);
@@ -368,7 +384,7 @@ pub mod pallet {
 
         /// 手动罚没部分抵押品（仅限 sudo/governance）
         #[pallet::call_index(6)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(<T as Config>::WeightInfo::slash_collateral())]
         pub fn slash_asset_collateral(origin: OriginFor<T>, asset_id: [u8; 32], slash_percentage: u8) -> DispatchResult {
             // Only sudo can slash
             ensure_root(origin)?;
@@ -380,7 +396,7 @@ pub mod pallet {
 
         /// 授权资产给市场账户（或其他账户）
         #[pallet::call_index(7)] // 索引号递增，不重复
-        #[pallet::weight(10_000)]
+        #[pallet::weight(<T as Config>::WeightInfo::authorize_operator())]
         pub fn authorize_market(
             origin: OriginFor<T>,
             asset_id: [u8; 32],
@@ -419,7 +435,7 @@ pub mod pallet {
 
         /// 撤销对市场的授权
         #[pallet::call_index(8)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(<T as Config>::WeightInfo::revoke_authorization())]
         pub fn revoke_authorization(
             origin: OriginFor<T>,
             asset_id: [u8; 32],

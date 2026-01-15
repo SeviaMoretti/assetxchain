@@ -17,6 +17,9 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
+#[cfg(feature = "runtime-benchmarks")]
+mod benchmarking;
+
 pub use pallet::*;
 use frame_support::{
     pallet_prelude::*,
@@ -47,6 +50,7 @@ type AssetId = [u8; 32];
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
+    use frame_system::WeightInfo;
     use pallet_shared_traits::DataAssetProvider;
 
     #[pallet::pallet]
@@ -115,6 +119,8 @@ pub mod pallet {
         /// 验证节点：元证验证奖励（默认50DAT/次）
         #[pallet::constant]
         type ValidatorVerificationReward: Get<BalanceOf<Self>>;
+
+        type WeightInfo: WeightInfo;
     }
 
     // -------------------------- 存储 --------------------------
@@ -428,7 +434,7 @@ impl<T: Config> Pallet<T> {
         )?;
 
         // 更新已使用金额
-        IncentivePoolUsed::<T>::mutate(|used| *used = used.saturating_add(amount));
+        IncentivePoolUsed::<T>::mutate(|used| *used = (*used).saturating_add(amount));
 
         Ok(())
     }
@@ -761,7 +767,7 @@ impl<T: Config> Pallet<T> {
 
     /// 登记交易者月交易额（供交易模块调用）
     pub fn register_trader_monthly_volume(trader: &T::AccountId, volume: BalanceOf<T>) {
-        TraderMonthlyVolume::<T>::mutate(trader, |v| *v = v.saturating_add(volume));
+        TraderMonthlyVolume::<T>::mutate(trader, |v| *v = (*v).saturating_add(volume));
     }
 }
 

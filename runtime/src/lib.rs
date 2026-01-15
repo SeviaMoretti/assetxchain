@@ -272,4 +272,7 @@ mod runtime {
 
 	#[runtime::pallet_index(17)]
     pub type Validator = pallet_validator;
+
+	#[runtime::pallet_index(18)]
+	pub type Collaterals = pallet_collaterals;
 }

@@ -32,4 +32,6 @@ frame_benchmarking::define_benchmarks!(
 	[pallet_sudo, Sudo]
 	[pallet_template, Template]
 	[pallet_dataassets, DataAssets]
+	[pallet_collaterals, Collaterals]
+	[pallet_incentive, Incentive]
 );

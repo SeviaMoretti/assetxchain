@@ -21,6 +21,7 @@ resolver = "2"
 [workspace.dependencies]
 solochain-template-runtime = { path = "./runtime", default-features = false }
 pallet-template = { path = "./pallets/template", default-features = false }
+pallet-collaterals = { path = "./pallets/collaterals", default-features = false }
 pallet-dataassets = { path = "./pallets/dataassets", default-features = false }
 pallet-rewards = { path = "./pallets/rewards", default-features = false }
 pallet-incentive = { path = "./pallets/incentive", default-features = false }

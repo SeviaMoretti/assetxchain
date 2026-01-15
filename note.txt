@@ -15,6 +15,13 @@ git clone 项目到本地后，不要更改catgo.toml中crate的version，cargo 
                     --repeat 20     
                     --output pallets/dataassets/src/weights.rs
 
+./target/release/solochain-template-node benchmark pallet \
+    --chain dev \
+    --pallet pallet_collaterals \
+    --extrinsic "*" \
+    --steps 50 \
+    --repeat 20 \
+    --output pallets/collaterals/src/weights.rs
 
 # Single-Node Development Chain
 polkadot-sdk: https://github.com/paritytech/polkadot-sdk

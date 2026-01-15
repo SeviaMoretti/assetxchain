@@ -2,37 +2,33 @@
 
 pub use pallet::*;
 
+#[cfg(feature = "runtime-benchmarks")]
+pub mod benchmarking;
+
 // 权重定义
-pub mod weights {
-    use frame_support::weights::Weight;
-
-    pub trait WeightInfo {
-        fn pledge() -> Weight;
-        fn unbond() -> Weight;
-    }
-
-    impl WeightInfo for () {
-        fn pledge() -> Weight { Weight::from_parts(10_000_000, 0) }
-        fn unbond() -> Weight { Weight::from_parts(10_000_000, 0) }
-    }
-}
+pub mod weights;
 
 #[frame_support::pallet]
 pub mod pallet {
-    use super::weights::WeightInfo;
+    use super::*;
     use frame_support::{
         pallet_prelude::*,
-        traits::{Currency, ReservableCurrency, Get, ExistenceRequirement, Imbalance},
+        traits::{Currency, ReservableCurrency, Get, ExistenceRequirement, Imbalance, BalanceStatus},
         transactional,
     };
     use frame_system::pallet_prelude::*;
     use sp_runtime::{
-        traits::{Zero, CheckedAdd, CheckedSub, SaturatedConversion, Bounded, AccountIdConversion},
+        traits::{Zero, CheckedAdd, CheckedSub, SaturatedConversion, Bounded, AccountIdConversion, Saturating},
         DispatchError, ArithmeticError,
     };
     use scale_info::TypeInfo;
     use core::convert::TryInto;
     use codec::{Encode, Decode, MaxEncodedLen, DecodeWithMemTracking};
+
+    pub trait WeightInfo {
+        fn unbond() -> Weight;
+        fn pledge() -> Weight;
+    }
 
     /// 货币类型的别名
     type BalanceOf<T> =
@@ -54,10 +50,10 @@ pub mod pallet {
     /// 质押角色枚举
     #[derive(Encode, Decode, Clone, Copy, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen, DecodeWithMemTracking)]
     pub enum CollateralRole {
-        DataCreator,        // 数据提供者
-        MarketOperator,     // 市场创建者
-        IpfsProvider,       // IPFS服务提供者
-        GovernancePledge,   // 验证节点，这里这个角色没用，相关逻辑在validators_set-->pallet-staking
+        DataCreator,        // 数据提供者，高频
+        MarketOperator,     // 市场创建者，低频
+        IpfsProvider,       // IPFS服务提供者，低频
+        GovernancePledge,   // 验证节点，这里这个角色没用到，相关逻辑在validators_set-->pallet-staking
     }
 
     /// 质押详细信息结构体
@@ -97,10 +93,6 @@ pub mod pallet {
         /// 用户补偿池 (用于 MarketOperator 违规)
         #[pallet::constant]
         type CompensationPoolAccount: Get<Self::AccountId>;
-
-        /// Pallet ID 用于派生账户
-        #[pallet::constant]
-        type PalletId: Get<frame_support::PalletId>;
 
         /// Weight information
         type WeightInfo: WeightInfo;
@@ -150,84 +142,63 @@ pub mod pallet {
 
     #[pallet::call]
     impl<T: Config> Pallet<T> {
-        /// 通用质押函数
+        
         #[pallet::call_index(0)]
         #[pallet::weight(T::WeightInfo::pledge())]
-        #[transactional]
-        // #[transactional]确保质押操作是原子的，要么全部成功，要么全部失败
-        pub fn pledge(
-            origin: OriginFor<T>,
-            role: CollateralRole,
-            amount: BalanceOf<T>,
-        ) -> DispatchResult {
+        pub fn pledge(origin: OriginFor<T>, role: CollateralRole, amount: BalanceOf<T>) -> DispatchResult {
             let who = ensure_signed(origin)?;
-            ensure!(!amount.is_zero(), Error::<T>::AmountIsZero);
-
-            // 1. 检查最小质押要求
-            Self::ensure_min_collateral(&role, amount)?;
-
-            // 2. 锁定（保留）用户的资金
-            T::Currency::reserve(&who, amount)?;
-
-            // 3. 更新或创建质押信息
-            CollateralData::<T>::try_mutate(
-                &who,
-                &role,
-                |collateral_info| -> DispatchResult {
-                    collateral_info.amount = collateral_info.amount.checked_add(&amount)
-                        .ok_or(ArithmeticError::Overflow)?;
-
-                    if collateral_info.start_block.is_zero() {
-                        collateral_info.start_block = frame_system::Pallet::<T>::block_number();
-                    }
-                    Ok(())
-                }
-            )?;
-
-            Self::deposit_event(Event::Pledged { who, role, amount });
-            Ok(())
+            Self::internal_pledge(&who, role, amount)
         }
 
-        /// 通用解除质押/释放函数
         #[pallet::call_index(1)]
         #[pallet::weight(T::WeightInfo::unbond())]
-        #[transactional]
-        pub fn unbond(
-            origin: OriginFor<T>,
-            role: CollateralRole,
-        ) -> DispatchResult {
+        pub fn unbond(origin: OriginFor<T>, role: CollateralRole) -> DispatchResult {
             let who = ensure_signed(origin)?;
-            
-            // 1. 检查质押信息是否存在
-            ensure!(CollateralData::<T>::contains_key(&who, &role), Error::<T>::CollateralNotFound);
-            let collateral_info = CollateralData::<T>::get(&who, &role);
-
-            // 2. 检查并计算可释放金额和剩余金额
-            let (releasable_amount, remaining_amount) = Self::get_releasable_amount(&role, &collateral_info)?;
-
-            ensure!(!releasable_amount.is_zero(), Error::<T>::CollateralNotReadyForRelease);
-
-            // 3. 将资金从保留状态转移到自由状态
-            T::Currency::unreserve(&who, releasable_amount);
-            
-            // 4. 更新存储状态
-            if !remaining_amount.is_zero() {
-                CollateralData::<T>::mutate(&who, &role, |info| {
-                    info.amount = remaining_amount;
-                });
-            } else {
-                // 如果全部释放，则移除存储项
-                CollateralData::<T>::remove(&who, &role);
-            }
-
-            Self::deposit_event(Event::Unbonded { who, role, amount: releasable_amount });
-            Ok(())
+            Self::internal_unbond(&who, role)
         }
     }
 
     /// 辅助函数
     impl<T: Config> Pallet<T> {
         
+        pub fn internal_pledge(who: &T::AccountId, role: CollateralRole, amount: BalanceOf<T>) -> DispatchResult {
+            ensure!(!amount.is_zero(), Error::<T>::AmountIsZero);
+            Self::ensure_min_collateral(&role, amount)?;
+            
+            T::Currency::reserve(who, amount)?;
+
+            CollateralData::<T>::try_mutate(who, &role, |info| -> DispatchResult {
+                info.amount = info.amount.checked_add(&amount).ok_or(ArithmeticError::Overflow)?;
+                if info.start_block.is_zero() {
+                    info.start_block = frame_system::Pallet::<T>::block_number();
+                }
+                Ok(())
+            })?;
+
+            Self::deposit_event(Event::Pledged { who: who.clone(), role, amount });
+            Ok(())
+        }
+
+        // 核心解除质押逻辑
+        pub fn internal_unbond(who: &T::AccountId, role: CollateralRole) -> DispatchResult {
+            let collateral_info = CollateralData::<T>::get(who, &role);
+            ensure!(!collateral_info.amount.is_zero(), Error::<T>::CollateralNotFound);
+
+            let (releasable, remaining) = Self::get_releasable_amount(&role, &collateral_info)?;
+            ensure!(!releasable.is_zero(), Error::<T>::CollateralNotReadyForRelease);
+
+            T::Currency::unreserve(who, releasable);
+            
+            if remaining.is_zero() {
+                CollateralData::<T>::remove(who, &role);// 全部释放，移除存储项
+            } else {
+                CollateralData::<T>::mutate(who, &role, |info| info.amount = remaining);
+            }
+
+            Self::deposit_event(Event::Unbonded { who: who.clone(), role, amount: releasable });
+            Ok(())
+        }
+
         /// 检查最小质押要求
         fn ensure_min_collateral(role: &CollateralRole, amount: BalanceOf<T>) -> DispatchResult {
             let min_amount = match role {
@@ -293,13 +264,20 @@ pub mod pallet {
             slash_amount: BalanceOf<T>,
             slash_type: SlashType,
         ) -> Result<BalanceOf<T>, DispatchError> {
+            // 1. 基础检查
             ensure!(!slash_amount.is_zero(), Error::<T>::AmountIsZero);
             
-            // 1. 从用户的保留余额中扣除
-            let (slashed_imbalance, _) = T::Currency::slash_reserved(who, slash_amount);
-            let slashed_amount = slashed_imbalance.peek();
+            let collateral_info = CollateralData::<T>::get(who, &role);
+            let available_amount = collateral_info.amount;
+            
+            // 确保惩罚金额不超过用户实际持有的质押金
+            let actual_slash = if slash_amount > available_amount {
+                available_amount
+            } else {
+                slash_amount
+            };
 
-            if slashed_amount.is_zero() {
+            if actual_slash.is_zero() {
                 return Ok(BalanceOf::<T>::zero());
             }
 
@@ -311,77 +289,55 @@ pub mod pallet {
                 SlashType::IpfsProviderHeavy => (50, 0, 0, 50),
             };
 
-            // 3. 计算分配金额
-            let total_u128: u128 = slashed_amount.saturated_into();
-            
+            // 3. 计算各部分金额
+            let total_u128: u128 = actual_slash.saturated_into();
             let burn_amount: BalanceOf<T> = (total_u128 * burn_ratio as u128 / 100).saturated_into();
-            let incentive_amount: BalanceOf<T> = (total_u128 * incentive_ratio as u128 / 100).saturated_into();
             let compensation_amount: BalanceOf<T> = (total_u128 * compensation_ratio as u128 / 100).saturated_into();
             let ipfs_amount: BalanceOf<T> = (total_u128 * ipfs_ratio as u128 / 100).saturated_into();
             
-            let remaining = slashed_amount
-                .checked_sub(&burn_amount)
-                .and_then(|r| r.checked_sub(&incentive_amount))
-                .and_then(|r| r.checked_sub(&compensation_amount))
-                .and_then(|r| r.checked_sub(&ipfs_amount))
-                .unwrap_or_else(|| BalanceOf::<T>::zero());
-            
-            let final_incentive_amount = incentive_amount.checked_add(&remaining).unwrap_or(incentive_amount);
+            // 剩下的全部归入激励池，防止浮点数精度丢失导致的资金残留
+            let final_incentive_amount = actual_slash
+                .saturating_sub(burn_amount)
+                .saturating_sub(compensation_amount)
+                .saturating_sub(ipfs_amount);
 
-            // 4. 执行资金转移 - 需要将 slashed_imbalance 分解并分配到各个账户
-            // 由于 Currency::slash_reserved 返回 NegativeImbalance，我们需要处理这个不平衡
-            // 这里简化处理：直接 drop 不平衡（相当于销毁），然后从其他地方转移资金
-            // 在实际实现中，您可能需要更复杂的资金分配逻辑
+            // 4. 执行资金划拨 (Repatriate)
+            // 直接从 who 的 reserved 转移到各个池子账户的 free 余额中
             
-            drop(slashed_imbalance); // 销毁不平衡
-            
-            // 注意：这里需要从 pallet 账户转移资金到各个目标账户
-            // 但需要确保 pallet 账户有足够的资金
-            let pallet_account = Self::account_id();
-            
-            // 从 pallet 账户转移资金到各个池子
-            // 销毁 (转入黑洞)
             if !burn_amount.is_zero() {
-                T::Currency::transfer(&pallet_account, &T::DestructionAccount::get(), burn_amount, ExistenceRequirement::KeepAlive)?;
+                T::Currency::repatriate_reserved(who, &T::DestructionAccount::get(), burn_amount, BalanceStatus::Free)?;
             }
             
-            // 激励池
-            if !final_incentive_amount.is_zero() {
-                T::Currency::transfer(&pallet_account, &T::IncentivePoolAccount::get(), final_incentive_amount, ExistenceRequirement::KeepAlive)?;
-            }
-            
-            // 补偿池
             if !compensation_amount.is_zero() {
-                T::Currency::transfer(&pallet_account, &T::CompensationPoolAccount::get(), compensation_amount, ExistenceRequirement::KeepAlive)?;
+                T::Currency::repatriate_reserved(who, &T::CompensationPoolAccount::get(), compensation_amount, BalanceStatus::Free)?;
             }
             
-            // IPFS 存储池
             if !ipfs_amount.is_zero() {
-                T::Currency::transfer(&pallet_account, &T::IpfsPoolAccount::get(), ipfs_amount, ExistenceRequirement::KeepAlive)?;
+                T::Currency::repatriate_reserved(who, &T::IpfsPoolAccount::get(), ipfs_amount, BalanceStatus::Free)?;
+            }
+            
+            if !final_incentive_amount.is_zero() {
+                T::Currency::repatriate_reserved(who, &T::IncentivePoolAccount::get(), final_incentive_amount, BalanceStatus::Free)?;
             }
 
-            // 5. 更新存储中的质押金额
+            // 5. 更新存储
             CollateralData::<T>::mutate(who, &role, |info| {
-                info.amount = info.amount.checked_sub(&slashed_amount).unwrap_or_else(|| BalanceOf::<T>::zero());
+                info.amount = info.amount.saturating_sub(actual_slash);
                 if info.amount.is_zero() {
                     CollateralData::<T>::remove(who, &role);
                 }
             });
 
+            // 6. 触发事件
             Self::deposit_event(Event::SlashedAndDistributed { 
                 who: who.clone(), 
                 role,
-                slashed_amount, 
+                slashed_amount: actual_slash, 
                 burn_amount, 
                 incentive_amount: final_incentive_amount,
             });
 
-            Ok(slashed_amount)
-        }
-
-        // 获取 Pallet 自己的账户 ID
-        pub fn account_id() -> T::AccountId {
-            T::PalletId::get().into_account_truncating()
+            Ok(actual_slash)
         }
     }
 }

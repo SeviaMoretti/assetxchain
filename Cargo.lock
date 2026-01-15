@@ -6558,6 +6558,7 @@ dependencies = [
 name = "pallet-collaterals"
 version = "0.1.0"
 dependencies = [
+ "frame-benchmarking",
  "frame-support",
  "frame-system",
  "parity-scale-codec",
@@ -10688,6 +10689,7 @@ dependencies = [
  "pallet-authorship",
  "pallet-babe",
  "pallet-balances",
+ "pallet-collaterals",
  "pallet-contracts",
  "pallet-dataassets",
  "pallet-grandpa",

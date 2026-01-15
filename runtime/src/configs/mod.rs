@@ -542,6 +542,35 @@ impl frame_system::offchain::CreateInherent<pallet_im_online::Call<Runtime>> for
     }
 }
 
+parameter_types! {
+    pub const MinMarketOperatorCollateral: Balance = 10_000 * UNIT;
+    pub const MinIpfsProviderCollateral: Balance = 5_000 * UNIT;
+    pub const MinGovernancePledge: Balance = 20_000 * UNIT;
+    
+    // 资金池账户
+    pub const DestructionAccount: AccountId = AccountId::new([0u8; 32]); 
+    pub const IncentivePoolAccount: AccountId = AccountId::new([1u8; 32]);
+    pub const IpfsPoolAccount: AccountId = AccountId::new([2u8; 32]);
+    pub const CompensationPoolAccount: AccountId = AccountId::new([3u8; 32]);
+}
+
+impl pallet_collaterals::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type Currency = Balances; // 使用 balances 模块进行质押
+    
+    type MinMarketOperatorCollateral = MinMarketOperatorCollateral;
+    type MinIpfsProviderCollateral = MinIpfsProviderCollateral;
+    type MinGovernancePledge = MinGovernancePledge;
+    
+    type IncentivePoolAccount = IncentivePoolAccount;
+    type DestructionAccount = DestructionAccount;
+    type IpfsPoolAccount = IpfsPoolAccount;
+    type CompensationPoolAccount = CompensationPoolAccount;
+    
+    type WeightInfo = pallet_collaterals::weights::WeightInfo<Runtime>;
+}
+
+
 impl crate::custom_header::AssetsStateRootProvider<sp_runtime::traits::BlakeTwo256> for Runtime {
     fn compute_assets_state_root() -> sp_core::H256 {
         pallet_dataassets::Pallet::<Runtime>::compute_asset_root()

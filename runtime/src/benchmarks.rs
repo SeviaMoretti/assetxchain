@@ -34,4 +34,6 @@ frame_benchmarking::define_benchmarks!(
 	[pallet_dataassets, DataAssets]
 	[pallet_collaterals, Collaterals]
 	[pallet_incentive, Incentive]
+	[pallet_markets, Markets]
+	[pallet_rewards, Rewards]
 );

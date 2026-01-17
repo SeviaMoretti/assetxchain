@@ -311,6 +311,7 @@ impl pallet_rewards::Config for Runtime {
 	type RewardAdjustmentThreshold = RewardAdjustmentThreshold;
 	type AdjustedReward = AdjustedReward;
     type MaxSupply = MaxSupply;
+    type WeightInfo = pallet_rewards::weights::WeightInfo<Runtime>;
 }
 
 parameter_types! {
@@ -370,6 +371,7 @@ impl pallet_incentive::Config for Runtime {
     
     // 验证节点奖励配置
     type ValidatorVerificationReward = ValidatorVerificationReward;
+    type WeightInfo = pallet_incentive::weights::WeightInfo<Runtime>;
 }
 
 // 合约模块的常量
@@ -484,6 +486,8 @@ parameter_types! {
 
 impl pallet_markets::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
+    type Currency = Balances;
+    type MarketWeightInfo = pallet_markets::weights::WeightInfo<Runtime>;
 }
 
 parameter_types! {

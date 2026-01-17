@@ -8,8 +8,16 @@
 
 pub use pallet::*;
 
+#[cfg(feature = "runtime-benchmarks")]
+pub mod benchmarking;
+
+#[cfg(test)]
+mod mock;
+
 #[cfg(test)]
 mod tests;
+
+pub mod weights;
 
 #[frame_support::pallet]
 pub mod pallet {
@@ -21,6 +29,13 @@ pub mod pallet {
 	use frame_support::sp_runtime::Saturating;
 
 	pub type BalanceOf<T> = <<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
+
+	pub trait WeightInfo {
+		fn get_current_reward() -> Weight;
+		fn on_finalize_initial() -> Weight;
+		fn on_finalize_adjustment() -> Weight;
+		fn on_finalize_max_supply() -> Weight;
+	}
 
 	#[pallet::pallet]
 	pub struct Pallet<T>(_);
@@ -44,6 +59,8 @@ pub mod pallet {
         type AdjustedReward: Get<BalanceOf<Self>>;
 		#[pallet::constant]
     	type MaxSupply: Get<BalanceOf<Self>>;
+
+		type WeightInfo: WeightInfo;
 	}
 
 	#[pallet::storage]
@@ -141,7 +158,7 @@ pub mod pallet {
 	impl<T: Config> Pallet<T> {
 		/// 获取当前区块奖励的金额
 		#[pallet::call_index(0)]
-		#[pallet::weight(10_000)] // 临时权重，实际应定义WeightInfo
+		#[pallet::weight(T::WeightInfo::get_current_reward())]
 		// #[pallet::weight(T::WeightInfo::get_current_reward())]
 		pub fn get_current_reward(origin: OriginFor<T>) -> DispatchResult {
 			let who = ensure_signed(origin)?;

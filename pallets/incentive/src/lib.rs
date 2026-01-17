@@ -20,6 +20,8 @@ use alloc::vec::Vec;
 #[cfg(feature = "runtime-benchmarks")]
 mod benchmarking;
 
+pub mod weights;
+
 pub use pallet::*;
 use frame_support::{
     pallet_prelude::*,
@@ -50,8 +52,14 @@ type AssetId = [u8; 32];
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
-    use frame_system::WeightInfo;
     use pallet_shared_traits::DataAssetProvider;
+
+    pub trait WeightInfo {
+        fn trigger_dynamic_release() -> Weight;
+        fn distribute_quality_data_reward() -> Weight;
+        fn register_market_monthly_volume() -> Weight;
+        fn register_voting_weight() -> Weight;
+    }
 
     #[pallet::pallet]
     #[pallet::storage_version(STORAGE_VERSION)]
@@ -65,7 +73,7 @@ pub mod pallet {
         /// 货币类型
         type Currency: Currency<Self::AccountId> + ReservableCurrency<Self::AccountId>;
         
-        type DataAssetProvider: DataAssetProvider<Self::AccountId, [u8; 32]>;
+        type DataAssetProvider: pallet_shared_traits::DataAssetProvider<Self::AccountId, AssetId>;
 
         /// 激励池初始余额（3亿DAT，对应经济模型30%总量）
         #[pallet::constant]
@@ -340,7 +348,7 @@ pub mod pallet {
     impl<T: Config> Pallet<T> {
         /// 1. 手动触发激励池动态释放（仅治理权限）
         #[pallet::call_index(0)]
-        #[pallet::weight({10_000})]
+        #[pallet::weight(T::WeightInfo::trigger_dynamic_release())]
         pub fn trigger_dynamic_release(origin: OriginFor<T>) -> DispatchResult {
             ensure_root(origin)?;
             Self::dynamic_release_incentive_pool();
@@ -349,7 +357,7 @@ pub mod pallet {
 
         /// 2. 手动发放优质数据奖励（支持治理或自动触发）
         #[pallet::call_index(1)]
-        #[pallet::weight({10_000})]
+        #[pallet::weight(T::WeightInfo::distribute_quality_data_reward())]
         pub fn distribute_quality_data_reward(origin: OriginFor<T>, asset_id: AssetId) -> DispatchResult {
             ensure_root(origin)?;      
             match T::DataAssetProvider::get_asset_owner(&asset_id) {
@@ -375,7 +383,7 @@ pub mod pallet {
 
         /// 4. 登记市场月交易额（市场运营者调用，用于优质市场判定）
         #[pallet::call_index(3)]
-        #[pallet::weight({10_000})]
+        #[pallet::weight(T::WeightInfo::register_market_monthly_volume())]
         pub fn register_market_monthly_volume(
             origin: OriginFor<T>,
             market_id: [u8; 32],
@@ -388,7 +396,7 @@ pub mod pallet {
 
         /// 5. 登记治理投票权重（治理模块调用）
         #[pallet::call_index(4)]
-        #[pallet::weight({10_000})]
+        #[pallet::weight(T::WeightInfo::register_voting_weight())]
         pub fn register_voting_weight(
             origin: OriginFor<T>,
             voter: T::AccountId,
@@ -457,27 +465,25 @@ impl<T: Config> Pallet<T> {
             return Weight::zero();
         }
 
-        // 释放部分锁定资金 - 返回实际释放的金额
-        let actual_released = T::Currency::unreserve(&pool_account, release_amount);
-        
-        // 检查是否成功释放了足够的金额
-        if actual_released < release_amount {
-            log::error!(
-                "激励池资金释放失败: 期望释放 {:?}，实际释放 {:?}", 
-                release_amount, 
-                actual_released
-            );
+        // 未解除锁定的金额
+        let remaining_reserved = T::Currency::unreserve(&pool_account, release_amount);
+
+        // 计算真正解除锁定的金额
+        let actual_unreserved = release_amount.saturating_sub(remaining_reserved);
+
+        if actual_unreserved.is_zero() {
+            log::error!("激励池资金释放失败: 实际释放为 0");
             return Weight::zero();
         }
 
-        let new_released = released.saturating_add(release_amount);
-        let new_reserved = reserved.saturating_sub(release_amount);
+        let new_released = released.saturating_add(actual_unreserved);
+        let new_reserved = reserved.saturating_sub(actual_unreserved);
         
         IncentivePoolReleased::<T>::put(new_released);
         IncentivePoolReserved::<T>::put(new_reserved);
 
         Self::deposit_event(Event::IncentivePoolReleased {
-            amount: release_amount,
+            amount: actual_unreserved,
             new_balance: new_released,
             pool_account: pool_account.clone(),
         });

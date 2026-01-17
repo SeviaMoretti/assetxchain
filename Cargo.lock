@@ -6584,6 +6584,7 @@ dependencies = [
  "parity-scale-codec",
  "paste",
  "rand 0.8.5",
+ "rand_pcg",
  "scale-info",
  "serde",
  "smallvec",
@@ -6698,6 +6699,7 @@ dependencies = [
  "frame-system",
  "hex-literal 1.1.0",
  "log",
+ "pallet-dataassets",
  "pallet-shared-traits",
  "pallet-timestamp",
  "parity-scale-codec",
@@ -6712,6 +6714,7 @@ dependencies = [
 name = "pallet-markets"
 version = "0.1.0"
 dependencies = [
+ "frame-benchmarking",
  "frame-support",
  "frame-system",
  "pallet-contracts",
@@ -6759,6 +6762,7 @@ dependencies = [
  "frame-benchmarking",
  "frame-support",
  "frame-system",
+ "pallet-balances",
  "parity-scale-codec",
  "scale-info",
  "sp-core",

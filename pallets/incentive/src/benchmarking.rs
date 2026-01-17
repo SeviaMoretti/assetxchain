@@ -2,64 +2,81 @@
 
 use super::*;
 
-#[allow(unused)]
-use crate::Pallet as Incentive;
 use frame_benchmarking::{benchmarks, account, whitelisted_caller};
 use frame_system::RawOrigin;
 use frame_support::traits::{Currency, Get, ReservableCurrency};
-use sp_runtime::traits::{Saturating, One};
+use sp_runtime::traits::{Saturating, SaturatedConversion};
+use frame_support::storage::child;
+use sp_core::{storage::ChildInfo, H256};
+// 确保能够引用到 DataAsset 结构体
+use pallet_dataassets::types::DataAsset;
 
-// 辅助函数：初始化激励池余额和状态
-fn setup_pool<T: Config>() {
+// 与 pallet-dataassets 保持一致的子树 ID
+const ASSET_TRIE_ID: &[u8] = b":asset_trie:";
+
+/// 辅助函数：初始化激励池
+fn setup_pool_v1<T: Config>() {
     let pool_account = incentive_pool_account::<T>();
+    // 注入充足资金 (10倍初始值)
+    let funded_amount = T::InitialIncentivePool::get().saturating_mul(10u32.into());
+    T::Currency::make_free_balance_be(&pool_account, funded_amount);
+    
     let initial_balance = T::InitialIncentivePool::get();
-    
-    // 给池子账户注入初始资金
-    T::Currency::make_free_balance_be(&pool_account, initial_balance);
-    
-    // 模拟初始释放逻辑（如 on_runtime_upgrade 所做的那样）
     let release_ratio = T::DynamicReleaseRatio::get();
     let initial_release = release_ratio * initial_balance;
     let locked_amount = initial_balance.saturating_sub(initial_release);
     
-    // 锁定部分资金
-    let _ = T::Currency::reserve(&pool_account, locked_amount);
+    // 必须锁定资金
+    T::Currency::reserve(&pool_account, locked_amount).unwrap();
     
     IncentivePoolReleased::<T>::put(initial_release);
     IncentivePoolReserved::<T>::put(locked_amount);
 }
 
 benchmarks! {
-    // 1. 测试 trigger_dynamic_release (手动触发释放)
+    // 1. 手动释放逻辑测试
     trigger_dynamic_release {
-        setup_pool::<T>();
-        // 确保还有剩余可释放金额
-        let reserved = IncentivePoolReserved::<T>::get();
-        assert!(reserved > 0u32.into());
+        setup_pool_v1::<T>();
     }: _(RawOrigin::Root)
     verify {
-        // 验证已释放总额增加
-        assert!(IncentivePoolReleased::<T>::get() > 0u32.into());
+        assert!(IncentivePoolReleased::<T>::get() > BalanceOf::<T>::zero());
     }
 
-    // 2. 测试 distribute_quality_data_reward (优质数据奖励)
+    // 2. 优质数据奖励分发测试
     distribute_quality_data_reward {
-        setup_pool::<T>();
-        let asset_id: AssetId = [1u8; 32];
-        let threshold = T::QualityDataTradeThreshold::get();
+        setup_pool_v1::<T>();
+        let asset_id: [u8; 32] = [1u8; 32];
+        let owner: T::AccountId = account("owner", 0, 0);
+        let timestamp = 1642220000u64;
         
-        // 准备数据：手动插入交易笔数达到阈值
-        Asset30dTradeCount::<T>::insert(&asset_id, threshold);
+        // 账户准备
+        T::Currency::make_free_balance_be(&owner, T::Currency::minimum_balance() * 100u32.into());
+
+        // 构造DataAsset并注入子树
+        let mut asset = DataAsset::<T::AccountId>::minimal(
+            owner.clone(),
+            b"Benchmark Asset".to_vec(),
+            b"Description".to_vec(),
+            H256::repeat_byte(0x01),
+            timestamp,
+        );
+        asset.asset_id = asset_id;
+
+        let child_info = ChildInfo::new_default(ASSET_TRIE_ID);
+        let mut key = b"assets/".to_vec();
+        key.extend_from_slice(&asset_id);
         
-        // 注意：这里依赖 DataAssetProvider 能返回一个有效的 Owner。
-        // 在 Benchmark 环境下，通常 mock 或真实配置的 provider 需要能处理 [1u8; 32]
+        // 注入完整的 DataAsset 字节流
+        child::put(&child_info, &key, &asset);
+
+        // 交易量注入
+        Asset30dTradeCount::<T>::insert(&asset_id, T::QualityDataTradeThreshold::get());
     }: _(RawOrigin::Root, asset_id)
     verify {
-        // 验证已使用额度增加（假设奖励金额 > 0）
-        assert!(IncentivePoolUsed::<T>::get() > 0u32.into());
+        assert!(IncentivePoolUsed::<T>::get() > BalanceOf::<T>::zero());
     }
 
-    // 3. 测试 register_market_monthly_volume (登记市场交易额)
+    // 3. 市场交易额登记测试
     register_market_monthly_volume {
         let caller: T::AccountId = whitelisted_caller();
         let market_id: [u8; 32] = [2u8; 32];
@@ -69,7 +86,7 @@ benchmarks! {
         assert_eq!(MarketMonthlyVolume::<T>::get(&market_id), volume);
     }
 
-    // 4. 测试 register_voting_weight (登记投票权重)
+    // 4. 投票权重登记测试
     register_voting_weight {
         let voter: T::AccountId = account("voter", 0, 0);
         let weight: BalanceOf<T> = 5_000u32.into();

@@ -10,14 +10,20 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 pub use pallet::*;
+use frame_support::traits::{Currency, ReservableCurrency};
+
+#[cfg(feature = "runtime-benchmarks")]
+pub mod benchmarking;
+
+pub mod weights;
 
 mod original_lib;
 
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
-    use frame_support::pallet_prelude::*;
-    use frame_system::pallet_prelude::*;
+    use frame_support::{pallet_prelude::*};
+    use frame_system::{pallet_prelude::*};
 
     use pallet_contracts::{CollectEvents, DebugInfo, Determinism, chain_extension::ReturnFlags};
 
@@ -29,6 +35,11 @@ pub mod pallet {
     // ###应该将Selector放入 Config，在编译后的合约的metadata.json(target/ink/market_orderbook/market_orderbook.json)中查看
     const SELECTOR_IS_MARKET: [u8; 4] = [0x26, 0x3e, 0x53, 0x34];
     // 会添加多个Selector，约束市场创建者必须实现某些方法
+
+    pub trait WeightInfo {
+        fn register_market() -> Weight;
+        fn unregister_market() -> Weight;
+    }
 
     #[pallet::pallet]
     pub struct Pallet<T>(_);
@@ -60,6 +71,8 @@ pub mod pallet {
     #[pallet::config]
     pub trait Config: frame_system::Config + pallet_contracts::Config {
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
+        type Currency: Currency<Self::AccountId> + ReservableCurrency<Self::AccountId>;
+        type MarketWeightInfo: WeightInfo;
     }
 
     #[pallet::event]
@@ -102,7 +115,7 @@ pub mod pallet {
         /// 注册一个新市场
         /// 用户先部署智能合约，获得 contract_address，然后调用此函数进行注册
         #[pallet::call_index(0)]
-        #[pallet::weight(Weight::from_parts(10_000, 0))] // 修复权重警告
+        #[pallet::weight(T::MarketWeightInfo::register_market())]
         pub fn register_market(
             origin: OriginFor<T>,
             contract_address: T::AccountId,
@@ -169,7 +182,7 @@ pub mod pallet {
 
         /// 注销市场
         #[pallet::call_index(1)]
-        #[pallet::weight(Weight::from_parts(10_000, 0))] // 修复权重警告
+        #[pallet::weight(T::MarketWeightInfo::unregister_market())]
         pub fn unregister_market(
             origin: OriginFor<T>,
             contract_address: T::AccountId,

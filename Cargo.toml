@@ -14,7 +14,7 @@ members = [
     "pallets/incentive",
     "pallets/shared_traits",
     "runtime", 
-    "pallets/markets", "pallets/collaterals", "contracts/market_standard", "contracts/market_orderbook", "pallets/validator",
+    "pallets/markets", "pallets/collaterals", "contracts/market_standard", "contracts/market_orderbook", "pallets/validator", "pallets/storage_ipfs",
 ]
 resolver = "2"
 

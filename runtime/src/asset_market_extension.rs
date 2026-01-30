@@ -34,7 +34,8 @@ where
                 log::debug!(target: "runtime", "DataAssetsExtension: Calling TRANSFER_ASSET_FUNC_ID");
                 let mut env = env.buf_in_buf_out();
                 
-                // 1. 读取输入 (AssetId: [u8; 32], To AccountId)
+                // 1. 读取输入 (AssetId: [u8; 32], To AccountId)，！！！！应该增加一个price
+                // 之后调用 Incentive 模块：登记交易者（买家）月度交易额以及登记市场月度交易额
                 let (asset_id_bytes, to_account): ([u8; 32], T::AccountId) = env.read_as()?;
                 
                 // 2. 获取调用合约的地址 (Contract Address)

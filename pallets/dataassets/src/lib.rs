@@ -285,8 +285,8 @@ pub mod pallet {
             let mut certificate = RightToken::minimal(
                 token_id,
                 right_type_enum,
-                holder.clone(),
-                asset.owner.clone(),
+                holder.clone(), // 权证的购买者
+                asset.owner.clone(), // 元证持有者作为权证的发行者
                 asset_id,
                 current_time,
                 valid_until
@@ -318,10 +318,13 @@ pub mod pallet {
             asset.nonce += 1;
             asset.transaction_count += 1;
             asset.updated_at = Self::current_timestamp();
-            
+            // ！！！！没有修改资产状态
             Self::insert_asset(&asset_id, &asset)?;
             // 如果所有者自己转移资产，清除该资产上所有未完成的市场授权。确保授权记录不会残留。
+            // 但是这样会导致市场方无法继续操作资产，必须重新授权。
             AssetApprovals::<T>::remove(asset_id);
+
+            T::IncentiveHandler::register_asset_trade(&asset_id);
             Self::deposit_event(Event::AssetTransferred { asset_id, from: old_owner, to: new_owner });
             Ok(())
         }
@@ -461,7 +464,7 @@ pub mod pallet {
             Ok(())
         }
 
-        /// 市场账户（被授权方）转移资产
+        /// 市场账户（被授权方）转移资产，还有一个transfer_by_market_internal供链扩展调用
         #[pallet::call_index(9)]
         #[pallet::weight(10_000)]
         pub fn transfer_asset_by_market(
@@ -496,6 +499,8 @@ pub mod pallet {
             // 6. 转移后通常清除授权（ERC721标准行为，防止前任市场继续控制）
             AssetApprovals::<T>::remove(&asset_id);
             
+            T::IncentiveHandler::register_asset_trade(&asset_id);
+
             // 7. 发出事件
             Self::deposit_event(Event::AssetTransferred { 
                 asset_id, 
@@ -670,7 +675,7 @@ pub mod pallet {
             // 5. 保存并清理授权
             Self::insert_asset(asset_id, &asset)?;
             AssetApprovals::<T>::remove(asset_id);
-            
+            T::IncentiveHandler::register_asset_trade(asset_id);
             // 6. 发出事件
             Self::deposit_event(Event::AssetTransferred { 
                 asset_id: *asset_id, 

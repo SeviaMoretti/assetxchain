@@ -1,7 +1,6 @@
 #![cfg_attr(not(feature = "std"), no_std, no_main)]
 
-// 假设你提供的 lib.rs 内容被打包成了一个名为 `market_standard` 的 crate
-// 如果你在同一个文件中测试，请直接把标准定义放在 mod 内。
+// `market_standard`被打包成了一个crate
 use market_standard::{MarketStandard, DataAssetsExtError};
 
 #[ink::contract(env = market_standard::CustomEnvironment)]

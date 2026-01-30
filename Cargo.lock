@@ -6699,7 +6699,6 @@ dependencies = [
  "frame-system",
  "hex-literal 1.1.0",
  "log",
- "pallet-dataassets",
  "pallet-shared-traits",
  "pallet-timestamp",
  "parity-scale-codec",
@@ -6717,6 +6716,7 @@ dependencies = [
  "frame-benchmarking",
  "frame-support",
  "frame-system",
+ "pallet-collaterals",
  "pallet-contracts",
  "parity-scale-codec",
  "scale-info",
@@ -6797,6 +6797,7 @@ version = "0.1.0"
 dependencies = [
  "frame-support",
  "parity-scale-codec",
+ "scale-info",
  "sp-core",
  "sp-runtime",
  "sp-std",
@@ -11678,6 +11679,20 @@ dependencies = [
 [[package]]
 name = "storage_ipfs"
 version = "0.1.0"
+dependencies = [
+ "frame-benchmarking",
+ "frame-support",
+ "frame-system",
+ "pallet-collaterals",
+ "pallet-dataassets",
+ "pallet-shared-traits",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-core",
+ "sp-io",
+ "sp-runtime",
+ "sp-std",
+]
 
 [[package]]
 name = "string-interner"

@@ -36,7 +36,7 @@ substrate child trie:https://github.com/polkadot-developers/substrate-docs/blob/
 可以查适配版本：https://github.com/paritytech/polkadot-sdk/releases/tag/polkadot-v1.17.0
 
 crate:sc-network-types v0.15.5没有kad.rs，只有这个版本没有，直接用这个会报错，不会用
-MaxEncodedLen 不能用于包含 Vec 的类型，因为pallet编译的时候要求pallet里面的任何东西都要是定长，Vec是可变长度数据结构，所以不能有
+T>（普通动态数组） + 长度上限约束（由 S 定义），是 Substrate 链上存储的安全替代方案（几乎不会直接用 不能用于包含 Vec 的类型，因为pallet编译的时候要求pallet里面的任何东西都要是定长，Vec是可变长度数据结构，所以不能有
 
 #########
 ##启动开发链（最常用，自动生成临时数据，适合测试）
@@ -199,7 +199,7 @@ market_orderbook codehash:0xf4a81bd61431d94ea7faf34a298d1658cc92a087762952097b3d
 
 启动节点的时候指令有--validator,应该将这个节点对应的账户添加到validator的存储列表中
 
-
+问题：
 sc-network出现依赖错误，0.15.5没有kad模块，但是还就依赖上0.15.5,能跑动的版本是依赖的0.15.3
 cargo update -p sc-network-types@o.15.5 --precise 0.15.4
 强制更新0.15.5-->0.15.4，直接build出现68个error!!!!!
@@ -224,3 +224,7 @@ git的没有validator的版本，还是不行，各种版本都不行，
 最后发现问题是--features runtime-benchmarks没有传递到报错的包中，应该在runtime/.cargo.toml中[features]-->runtime-benchmarks = [???],开启对应特性。(polkadot-v1.19.0,no_validator)
 
 0x13ccc6771b9a2c40ed960af051476c1458f6d4a77d286978e6608f6724f4b078
+
+
+pallet-dataassets::types::DataAssets有价格的字段，但是应该在授权市场的时候设置，所以下一步应该将这部分逻辑移到授权市场并且市场存储。
+pallet

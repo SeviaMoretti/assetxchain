@@ -12,6 +12,8 @@
 pub use pallet::*;
 use frame_support::traits::{Currency, ReservableCurrency};
 
+use pallet_collaterals::{CollateralRole};
+
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
 
@@ -30,11 +32,7 @@ pub mod pallet {
     use codec::{Encode, Decode, MaxEncodedLen, DecodeWithMemTracking};
     
     /// 函数选择器：对应ink!合约的is_assetx_market()方法
-    /// 生成方式：在合约项目中执行 `cargo contract metadata --json | jq '.V1.spec.messages[] | select(.name == "is_assetx_market") | .selector'`
-    /// 生产环境必须替换为实际生成的选择器，否则会导致调用失败
-    // ###应该将Selector放入 Config，在编译后的合约的metadata.json(target/ink/market_orderbook/market_orderbook.json)中查看
     const SELECTOR_IS_MARKET: [u8; 4] = [0x26, 0x3e, 0x53, 0x34];
-    // 会添加多个Selector，约束市场创建者必须实现某些方法
 
     pub trait WeightInfo {
         fn register_market() -> Weight;
@@ -44,9 +42,7 @@ pub mod pallet {
     #[pallet::pallet]
     pub struct Pallet<T>(_);
     
-    // 多源同构数据市场，市场类型得展示出来，只在智能合约里面就很鸡肋
-
-    // 定义市场支持的资产类型，另一种资产类型在准入规则中限制、定义
+    // 市场资产类型
     #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen, DecodeWithMemTracking)]
     pub enum MarketAssetType {
         DataAsset,      // 交易元证 (Assets)
@@ -69,7 +65,8 @@ pub mod pallet {
     }
 
     #[pallet::config]
-    pub trait Config: frame_system::Config + pallet_contracts::Config {
+    // 继承 pallet_collaterals::Config
+    pub trait Config: frame_system::Config + pallet_contracts::Config + pallet_collaterals::Config {
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
         type Currency: Currency<Self::AccountId> + ReservableCurrency<Self::AccountId>;
         type MarketWeightInfo: WeightInfo;
@@ -102,7 +99,6 @@ pub mod pallet {
 
     #[pallet::storage]
     #[pallet::getter(fn registered_markets)]
-    // 使用 ContractAddress 作为 Key，确保一个合约对应一个市场记录
     pub type RegisteredMarkets<T: Config> = StorageMap<
         _, 
         Blake2_128Concat, 
@@ -113,7 +109,7 @@ pub mod pallet {
     #[pallet::call]
     impl<T: Config> Pallet<T> {
         /// 注册一个新市场
-        /// 用户先部署智能合约，获得 contract_address，然后调用此函数进行注册
+        /// 用户先部署智能合约，获得 ontract_address，然后调用此函数进行注册
         #[pallet::call_index(0)]
         #[pallet::weight(T::MarketWeightInfo::register_market())]
         pub fn register_market(
@@ -123,40 +119,45 @@ pub mod pallet {
         ) -> DispatchResult {
             let creator = ensure_signed(origin)?;
 
-            // 确保该合约地址没有被注册过
+            // 1. 基础检查
             ensure!(!RegisteredMarkets::<T>::contains_key(&contract_address), Error::<T>::MarketAlreadyExists);
             let asset_type_for_event = asset_type.clone();
+
+            // 2.质押
+            // 获取配置中定义的市场运营者最小质押金额
+            let min_collateral = <T as pallet_collaterals::Config>::MinMarketOperatorCollateral::get();
             
-            // 调用合约的is_assetx_market方法验证市场是否符合标准
+            // 调用pallet-collaterals的内部质押函数
+            // 检查余额并锁定资金，余额不足会返回Error
+            pallet_collaterals::Pallet::<T>::internal_pledge(
+                &creator,
+                CollateralRole::MarketOperator,
+                min_collateral
+            )?;
+            
+            // 3. 验证合约逻辑
             let input_data = SELECTOR_IS_MARKET.to_vec();
-            // 应该估算合约调用所需gas（避免硬编码导致的gas不足或浪费）
             let gas_limit = Weight::from_parts(5_000_000_000, 256 * 1024);
 
             let result = pallet_contracts::Pallet::<T>::bare_call(
-                creator.clone(),          // 调用者账号（市场创建者）
-                contract_address.clone(), // 目标合约地址（要验证的合约）
-                0u32.into(),              // 随调用转账的金额（这里为 0，调用方法不转账）
-                gas_limit,                // 调用允许消耗的最大 gas（防止无限循环等问题）
-                None,                     // 盐值（用于创建合约时的确定性地址，调用已部署合约，None）
-                input_data,               // 输入数据（包含函数选择器，用于指定调用合约的哪个方法）
-                DebugInfo::Skip,          // 是否收集调试信息（跳过）
-                CollectEvents::Skip,      // 是否收集合约触发的事件（跳过）
-                Determinism::Enforced,    // 是否强制确定性执行（确保调用结果可复现）
+                creator.clone(),
+                contract_address.clone(),
+                0u32.into(),
+                gas_limit,
+                None,
+                input_data,
+                DebugInfo::Skip,
+                CollectEvents::Skip,
+                Determinism::Enforced,
             );
 
-            // 检查返回值是否为 true (ink! bool true = 0x01)
-            // 验证调用结果（细化错误处理，明确失败原因）
             let verified = match result.result {
                 Ok(retval) => {
-                    // 检查是否发生了 Revert
                     if retval.flags.contains(ReturnFlags::REVERT) {
                         false
                     } else {
-                        // 将返回数据解码为 Result<bool, _>
                         let decoded_result: Result<Result<bool, u8>, _> = Decode::decode(&mut &retval.data[..]);
-                        
                         match decoded_result {
-                            // 外层Ok代表解码成功，内层Ok(true)代表合约返回了True
                             Ok(Ok(true)) => true,
                             _ => false,
                         }
@@ -167,6 +168,7 @@ pub mod pallet {
 
             ensure!(verified, Error::<T>::MarketVerificationFailed);
 
+            // 4. 存储市场信息
             let info = MarketRegistryInfo {
                 creator: creator.clone(),
                 contract_address: contract_address.clone(),
@@ -189,9 +191,20 @@ pub mod pallet {
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
             
+            // 1. 检查权限
             let market = RegisteredMarkets::<T>::get(&contract_address).ok_or(Error::<T>::MarketNotFound)?;
             ensure!(market.creator == who, Error::<T>::NotOwner);
 
+            // 2. 解除质押
+            // 调用 pallet-collaterals 的内部解押函数
+            // 如果未满 2 年，这里会返回CollateralNotReadyForRelease错误
+            // 这意味着市场在锁定期内无法被完全注销
+            pallet_collaterals::Pallet::<T>::internal_unbond(
+                &who,
+                CollateralRole::MarketOperator
+            )?;
+
+            // 3. 移除市场信息
             RegisteredMarkets::<T>::remove(&contract_address);
             
             Self::deposit_event(Event::MarketUnregistered { contract_address });

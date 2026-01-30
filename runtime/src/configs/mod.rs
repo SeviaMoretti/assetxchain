@@ -553,7 +553,7 @@ parameter_types! {
     
     // 资金池账户
     pub const DestructionAccount: AccountId = AccountId::new([0u8; 32]); 
-    pub const IncentivePoolAccount: AccountId = AccountId::new([1u8; 32]);
+    pub const IncentivePoolAccount: AccountId = AccountId::new([1u8; 32]); // pallets/incentive/src/lib.rs 中有账户定义
     pub const IpfsPoolAccount: AccountId = AccountId::new([2u8; 32]);
     pub const CompensationPoolAccount: AccountId = AccountId::new([3u8; 32]);
 }

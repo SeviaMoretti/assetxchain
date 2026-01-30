@@ -775,6 +775,10 @@ impl<T: Config> Pallet<T> {
     pub fn register_trader_monthly_volume(trader: &T::AccountId, volume: BalanceOf<T>) {
         TraderMonthlyVolume::<T>::mutate(trader, |v| *v = (*v).saturating_add(volume));
     }
+
+    pub fn register_market_volume_internal(market_id: &[u8; 32], volume: BalanceOf<T>) {
+         MarketMonthlyVolume::<T>::mutate(market_id, |v| *v = (*v).saturating_add(volume));
+    }
 }
 
 impl<T: Config> pallet_shared_traits::IncentiveHandler<T::AccountId, [u8; 32], BalanceOf<T>> for Pallet<T> {

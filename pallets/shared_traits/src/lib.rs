@@ -1,10 +1,21 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
+use scale_info::TypeInfo;
+use sp_core::H256;
+
 #[derive(Debug, PartialEq, Eq, codec::Encode, codec::Decode)]
 pub enum AssetQueryError {
     AssetNotFound,
     InvalidOwner,
     OwnerAccountDoesNotExist,
+}
+
+#[derive(codec::Encode, codec::Decode, Clone, PartialEq, Eq, Debug, TypeInfo, codec::DecodeWithMemTracking)]
+pub struct EncryptionInfo {
+    pub algorithm: Vec<u8>,
+    pub key_length: u32,
+    pub parameters_hash: H256,
+    pub is_encrypted: bool,
 }
 
 use sp_std::prelude::*;
@@ -28,4 +39,16 @@ pub trait IncentiveHandler<AccountId, AssetId, Balance> {
 pub trait DataAssetProvider<AccountId, AssetId> {
     /// 获取资产信息，主要向incentive模块提供查询资产是否存在的功能
     fn get_asset_owner(asset_id: &AssetId) -> Result<AccountId, AssetQueryError>;
+}
+
+pub trait DataAssetInternal<AccountId, Balance> {
+    fn register_asset(
+        owner: AccountId,
+        name: Vec<u8>,
+        description: Vec<u8>,
+        raw_data_hash: sp_core::H256,
+        data_size: u64,
+        metadata_cid: Vec<u8>,
+        encryption_info: EncryptionInfo,
+    ) -> frame_support::dispatch::DispatchResult;
 }

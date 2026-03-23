@@ -89,7 +89,8 @@ mod block_times {
 	///
 	/// Change this to adjust the block time.
 	// 出块频率6000毫秒
-	pub const MILLI_SECS_PER_BLOCK: u64 = 6000*3;
+	pub const MILLI_SECS_PER_BLOCK: u64 = 400;
+	// pub const MILLI_SECS_PER_BLOCK: u64 = 6000*3;
 
 	// NOTE: Currently it is not possible to change the slot duration after the chain has started.
 	// Attempting to do so will brick block production.

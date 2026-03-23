@@ -25,6 +25,7 @@ sp-runtime.workspace = true
 sp-core.workspace = true
 hex-literal.workspace = true
 log.workspace = true
+pallet-dataassets.workspace = true
 
 [dev-dependencies]
 sp-core = { default-features = true, workspace = true }
@@ -46,6 +47,7 @@ std = [
     "sp-runtime/std",
     "log/std",
     "pallet-shared-traits/std",
+	"pallet-dataassets/std",
 ]
 runtime-benchmarks = [
 	"frame-benchmarking/runtime-benchmarks",

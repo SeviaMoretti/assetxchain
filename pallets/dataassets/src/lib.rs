@@ -523,7 +523,7 @@ pub mod pallet {
             key
         }
         
-        fn insert_asset(asset_id: &[u8; 32], asset: &DataAsset<T::AccountId>) -> DispatchResult {
+        pub fn insert_asset(asset_id: &[u8; 32], asset: &DataAsset<T::AccountId>) -> DispatchResult {
             let child_info = Self::asset_trie_info();
             let key = Self::make_asset_key(asset_id);
             child::put(&child_info, &key, asset);

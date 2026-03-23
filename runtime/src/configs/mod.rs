@@ -101,7 +101,8 @@ impl frame_system::Config for Runtime {
 parameter_types! {
     // Epoch 持续时间（slot 数量）
     // 2400 个 slot × 6 秒 = 4 小时一个 epoch
-    pub const EpochDuration: u64 = 2400;
+    // pub const EpochDuration: u64 = 2400;
+    pub const EpochDuration: u64 = 10_000_000;
     
     // 期望的区块时间（毫秒）
     pub const ExpectedBlockTime: u64 = MILLI_SECS_PER_BLOCK;
@@ -113,7 +114,8 @@ parameter_types! {
 
 // Session
 parameter_types! {
-    pub const Period: u32 = 6 * HOURS; // 一个 session 6 小时
+    pub const Period: u32 = 10_000_000;
+    // pub const Period: u32 = 6 * HOURS; // 一个 session 6 小时
     pub const Offset: u32 = 0;
 }
 
@@ -266,7 +268,10 @@ impl pallet_dataassets::Config for Runtime {
 // 添加参数配置
 parameter_types! {
     // 5年线性释放 (按区块计算: 5年 * 365天 * 24小时 * 60分钟 * 60秒 / 18秒每区块)
-    pub const FoundationVestingPeriod: BlockNumber = 5 * 365 * 24 * 60 * 60 / (MILLI_SECS_PER_BLOCK / 1000) as BlockNumber;
+    // pub const FoundationVestingPeriod: BlockNumber = 5 * 365 * 24 * 60 * 60 / (MILLI_SECS_PER_BLOCK / 1000) as BlockNumber;
+    pub const FoundationVestingPeriod: BlockNumber = (
+        (5 * 365 * 24 * 60 * 60 * 1000u64) / (MILLI_SECS_PER_BLOCK as u64)
+    ) as BlockNumber;
     pub const MinVestedTransfer: Balance = 1 * UNIT;
 	pub const MaxVestingSchedules: u32 = 20;
 	pub const AllowedWithdrawReasons: WithdrawReasons = WithdrawReasons::from_bits(

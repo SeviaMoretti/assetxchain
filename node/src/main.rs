@@ -7,6 +7,7 @@ mod cli;
 mod command;
 mod rpc;
 mod service;
+mod data_asset_rpc;
 
 fn main() -> sc_cli::Result<()> {
 	command::run()

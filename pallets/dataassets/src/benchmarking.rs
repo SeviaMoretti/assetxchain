@@ -245,7 +245,6 @@ mod benchmarks {
         unlock_asset(RawOrigin::Signed(owner.clone()), asset_id);
     }
 
-    // ⚠️ 修复：使用正确的函数名 slash_asset_collateral
     #[benchmark]
     fn slash_collateral() {
         // 设置
@@ -277,7 +276,6 @@ mod benchmarks {
         slash_asset_collateral(RawOrigin::Root, asset_id, slash_percentage);
     }
 
-    // ⚠️ 修复：使用正确的函数名 authorize_market
     #[benchmark]
     fn authorize_operator() {
         // 设置
@@ -346,6 +344,63 @@ mod benchmarks {
 
         #[extrinsic_call]
         revoke_authorization(RawOrigin::Signed(owner.clone()), asset_id);
+    }
+
+    #[benchmark]
+    fn register_asset_under_load(
+        // 从 1 万到 10 万，步长由 --steps 决定
+        x: Linear<10_000, 100_000>, 
+    ) {
+        let caller = create_funded_account::<T>("caller", 0);
+        let collateral = T::BaseCollateral::get().saturating_add(T::CollateralPerMB::get());
+        T::Currency::make_free_balance_be(&caller, collateral * 100_000u32.into());
+
+        // 1. 模拟向主资产树（Asset Trie Child-Trie）中疯狂注水 x 个资产
+        // 我们直接调用 lib.rs 中你自己写的子树写入方法，完全越过上层业务逻辑，极速撑爆 RocksDB
+        for i in 0..x {
+            // 生成一个模拟的 hash 和 [u8; 32] 类型的 asset_id
+            // let dummy_hash = H256::from_low_u64_be(i as u64);
+            // let dummy_asset_id: [u8; 32] = dummy_hash.into();
+            let mut hash_bytes = [0u8; 32];
+            let i_bytes = (i as u64).to_be_bytes();
+            hash_bytes[24..32].copy_from_slice(&i_bytes);
+
+            let dummy_hash = H256::from(hash_bytes);
+            let dummy_asset_id: [u8; 32] = hash_bytes;
+
+            // 使用你在 types.rs 中规范的 minimal 构造器，防止结构体字段缺失报错
+            let mut dummy_asset = crate::types::DataAsset::minimal(
+                caller.clone(),
+                b"Dummy".to_vec(),
+                b"Dummy Desc".to_vec(),
+                dummy_hash,       // raw_data_hash
+                0u64,             // timestamp
+            );
+            
+            // 补全特定字段
+            dummy_asset.asset_id = dummy_asset_id;
+            dummy_asset.token_id = i;
+
+            // 调用 lib.rs 里的内部方法写入 Child Trie (注: benchmarking 和 lib 同属一个 crate，可直接访问此非 pub 方法)
+            let _ = crate::Pallet::<T>::insert_asset(&dummy_asset_id, &dummy_asset);
+        }
+
+        let name = b"Target Asset".to_vec();
+        let description = b"Target Desc".to_vec();
+        let target_hash = H256::repeat_byte(0xFF); // 发起真实交易的目标资产哈希
+
+        // 开始计时（Benchmark 框架只记录这块执行的时间）
+        #[extrinsic_call]
+        register_asset(
+            RawOrigin::Signed(caller.clone()),
+            name,
+            description,
+            target_hash,
+            1024,
+        );
+        
+        // 验证注册是否成功
+        assert!(frame_system::Pallet::<T>::events().len() > 0);
     }
 
     impl_benchmark_test_suite!(DataAssets, crate::tests::new_test_ext(), crate::tests::Test);

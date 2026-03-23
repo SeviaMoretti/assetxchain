@@ -16,6 +16,12 @@ members = [
     "runtime", 
     "pallets/markets", "pallets/collaterals", "contracts/market_standard", "contracts/market_orderbook", "pallets/validator", "pallets/storage_ipfs",
 ]
+
+exclude = [
+    "contracts/zhushui",
+    "contracts/market_standard", 
+    "contracts/market_orderbook"
+]
 resolver = "2"
 
 [workspace.dependencies]

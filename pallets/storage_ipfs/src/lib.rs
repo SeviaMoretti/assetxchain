@@ -1,5 +1,8 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
+///数据物理层存储
+///数据存储、验证、激励、惩罚
+
 pub use pallet::*;
 
 #[frame_support::pallet]
@@ -33,10 +36,21 @@ pub mod pallet {
 
     /// 存储提供者信息
     #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
-    pub struct ProviderInfo<BlockNumber> {
+    pub struct ProviderInfo<BlockNumber, Balance> {
         pub endpoint: BoundedVec<u8, ConstU32<128>>, // IPFS Multiaddr
+        pub capacity: u32, // 存储容量（单位：GB）
+        pub pledged_amount: Balance, // 质押金额
         pub registered_at: BlockNumber,
         pub is_active: bool,
+    }
+
+    /// 资产的存储绑定信息
+    #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
+    pub struct AssetStorageInfo<AccountId, Balance> {
+        pub provider_id: AccountId,                  // 绑定的服务商
+        pub storage_fund: Balance, // 应该是从账户中扣除的、 IPFS存储费用池（从注册质押金中划扣）
+        pub storage_account: AccountId,                 // 存储专用账户（用于支付存储费用）
+        pub is_weak: bool,                           // 是否处于余额不足的虚弱状态
     }
 
     /// 存储证明记录
@@ -52,7 +66,7 @@ pub mod pallet {
         _,
         Blake2_128Concat,
         T::AccountId,
-        ProviderInfo<BlockNumberFor<T>>,
+        ProviderInfo<BlockNumberFor<T>, BalanceOf<T>>,
         OptionQuery,
     >;
 
@@ -63,6 +77,17 @@ pub mod pallet {
         Blake2_128Concat, [u8; 32], // asset_id
         Blake2_128Concat, T::AccountId, // provider
         StorageProof<BlockNumberFor<T>>,
+        OptionQuery,
+    >;
+
+    /// 记录资产ID与存储绑定信息的映射
+    #[pallet::storage]
+    #[pallet::getter(fn asset_storage_binds)]
+    pub type AssetStorageBinds<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        [u8; 32], // asset_id
+        AssetStorageInfo<T::AccountId, BalanceOf<T>>,
         OptionQuery,
     >;
 
@@ -83,13 +108,27 @@ pub mod pallet {
 
     #[pallet::call]
     impl<T: Config> Pallet<T> {
+
+        /// 1、服务商
+        /// register_provider (服务商注册)
+        /// update_capacity (容量扩容)
+        /// exit_provider (主动退出网络)
+        /// 2资产存储
+        /// register_ipfs_asset (注册存储资产)
+        /// 3
+        /// submit_storage_proof (提交存储证明)
+        /// verify_storage_challenge (OCW随机挑战)
+        /// 4
+        /// settle_reward (结算存储报酬)
+        /// slash_provider (惩罚服务商）
+
         /// 注册成为 IPFS 存储服务商
         #[pallet::call_index(0)]
         #[pallet::weight(10_000)]
         pub fn register_provider(
             origin: OriginFor<T>,
             endpoint: Vec<u8>,
-            pledge_amount: BalanceOf<T>,
+            pledge_amount: BalanceOf<T>,// 根据容量需求计算质押金额
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
             
@@ -108,6 +147,8 @@ pub mod pallet {
 
             Providers::<T>::insert(&who, ProviderInfo {
                 endpoint: bounded_endpoint,
+                capacity: 0,
+                pledged_amount: pledge_amount,
                 registered_at: frame_system::Pallet::<T>::block_number(),
                 is_active: true,
             });

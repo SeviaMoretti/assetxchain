@@ -132,7 +132,7 @@ pub mod pallet {
     }
 
     // -------------------------- 存储 --------------------------
-
+    // !!!!!怎么判断市场流动性（活力）不足
     /// 激励池已释放总额（用于动态释放计算）
     #[pallet::storage]
     #[pallet::getter(fn incentive_pool_released)]

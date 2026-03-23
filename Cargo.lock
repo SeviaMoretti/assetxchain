@@ -6699,6 +6699,7 @@ dependencies = [
  "frame-system",
  "hex-literal 1.1.0",
  "log",
+ "pallet-dataassets",
  "pallet-shared-traits",
  "pallet-timestamp",
  "parity-scale-codec",

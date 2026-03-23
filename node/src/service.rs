@@ -1,6 +1,6 @@
 //! Service and ServiceFactory implementation. Specialized wrapper over substrate service.
 
-use futures::FutureExt;
+use futures::{StreamExt, FutureExt};
 use sc_client_api::{Backend, BlockBackend};
 use sc_consensus_grandpa::SharedVoterState;
 use sc_service::{error::Error as ServiceError, Configuration, TaskManager, WarpSyncConfig};
@@ -9,6 +9,7 @@ use sc_transaction_pool_api::OffchainTransactionPoolFactory;
 use solochain_template_runtime::{self, apis::RuntimeApi, opaque::Block};
 use std::{sync::Arc, time::Duration};
 use sc_consensus_babe::{self, BabeParams, SlotProportion, BabeBlockImport};
+use sc_consensus_manual_seal::{run_instant_seal, InstantSealParams};
 
 pub(crate) type FullClient = sc_service::TFullClient<
 	Block,
@@ -29,10 +30,12 @@ pub type Service = sc_service::PartialComponents<
 	sc_consensus::DefaultImportQueue<Block>,
 	sc_transaction_pool::TransactionPoolHandle<Block, FullClient>,
 	(
-		BabeBlockImport<Block, FullClient, FullGrandpaBlockImport>,
-        sc_consensus_grandpa::LinkHalf<Block, FullClient, FullSelectChain>,
+		// BabeBlockImport<Block, FullClient, FullGrandpaBlockImport>,
+        FullGrandpaBlockImport,
+		sc_consensus_grandpa::LinkHalf<Block, FullClient, FullSelectChain>,
         sc_consensus_babe::BabeLink<Block>,
-		sc_consensus_babe::BabeWorkerHandle<Block>,
+		(),
+		// sc_consensus_babe::BabeWorkerHandle<Block>,
         Option<Telemetry>,
 	),
 >;
@@ -104,27 +107,42 @@ pub fn new_partial(config: &Configuration) -> Result<Service, ServiceError> {
     let slot_duration = babe_link.config().slot_duration();
 
     // BABE import queue - 修复：使用正确的结构体字段
-    let (import_queue, babe_worker) = sc_consensus_babe::import_queue(sc_consensus_babe::ImportQueueParams {
-		link: babe_link.clone(),
-		block_import: babe_block_import.clone(),
-		justification_import: Some(Box::new(grandpa_block_import)),
-		client: client.clone(),
-		select_chain: select_chain.clone(),
-		create_inherent_data_providers: move |_, ()| async move {
-			let timestamp = sp_timestamp::InherentDataProvider::from_system_time();
-			let slot = sp_consensus_babe::inherents::InherentDataProvider::from_timestamp_and_slot_duration(
-				*timestamp,
-				slot_duration,
-			);
-			Ok((slot, timestamp))
-		},
-		spawner: &task_manager.spawn_essential_handle(),
-		registry: config.prometheus_registry(),
-		telemetry: telemetry.as_ref().map(|x| x.handle()),
-		offchain_tx_pool_factory: OffchainTransactionPoolFactory::new(transaction_pool.clone()),
-	})?;
+    // let (import_queue, babe_worker) = sc_consensus_babe::import_queue(sc_consensus_babe::ImportQueueParams {
+	// 	link: babe_link.clone(),
+	// 	block_import: babe_block_import.clone(),
+	// 	justification_import: Some(Box::new(grandpa_block_import)),
+	// 	client: client.clone(),
+	// 	select_chain: select_chain.clone(),
+	// 	create_inherent_data_providers: move |_, ()| async move {
+	// 		let timestamp = sp_timestamp::InherentDataProvider::from_system_time();
+	// 		let slot = sp_consensus_babe::inherents::InherentDataProvider::from_timestamp_and_slot_duration(
+	// 			*timestamp,
+	// 			slot_duration,
+	// 		);
+	// 		Ok((slot, timestamp))
+	// 	},
+	// 	spawner: &task_manager.spawn_essential_handle(),
+	// 	registry: config.prometheus_registry(),
+	// 	telemetry: telemetry.as_ref().map(|x| x.handle()),
+	// 	offchain_tx_pool_factory: OffchainTransactionPoolFactory::new(transaction_pool.clone()),
+	// })?;
 
-    Ok(sc_service::PartialComponents {
+	let import_queue = sc_consensus_manual_seal::import_queue(
+        Box::new(grandpa_block_import.clone()), // 直接使用 client 作为 BlockImport
+        &task_manager.spawn_essential_handle(),
+        config.prometheus_registry(),
+    );
+    // Ok(sc_service::PartialComponents {
+    //     client,
+    //     backend,
+    //     task_manager,
+    //     import_queue,
+    //     keystore_container,
+    //     select_chain,
+    //     transaction_pool,
+    //     other: (babe_block_import, grandpa_link, babe_link, babe_worker, telemetry),
+    // })
+	Ok(sc_service::PartialComponents {
         client,
         backend,
         task_manager,
@@ -132,7 +150,7 @@ pub fn new_partial(config: &Configuration) -> Result<Service, ServiceError> {
         keystore_container,
         select_chain,
         transaction_pool,
-        other: (babe_block_import, grandpa_link, babe_link, babe_worker, telemetry),
+        other: (grandpa_block_import, grandpa_link, babe_link, (), telemetry),
     })
 }
 
@@ -150,7 +168,7 @@ pub fn new_full<
 		keystore_container,
 		select_chain,
 		transaction_pool,
-		other: (block_import, grandpa_link, babe_link, babe_worker, mut telemetry),
+		other: (block_import, grandpa_link, babe_link, _, mut telemetry),
 	} = new_partial(&config)?;
 
 	let mut net_config = sc_network::config::FullNetworkConfiguration::<
@@ -257,14 +275,48 @@ pub fn new_full<
 
 		let slot_duration = babe_link.config().slot_duration();
 
-		let babe_params = BabeParams {
-			keystore: keystore_container.keystore(),
-			client: client.clone(),
-			select_chain,
-			env: proposer_factory,
+		// let babe_params = BabeParams {
+		// 	keystore: keystore_container.keystore(),
+		// 	client: client.clone(),
+		// 	select_chain,
+		// 	env: proposer_factory,
+		// 	block_import,
+		// 	sync_oracle: sync_service.clone(),
+		// 	justification_sync_link: sync_service.clone(),
+		// 	create_inherent_data_providers: move |_, ()| async move {
+		// 		let timestamp = sp_timestamp::InherentDataProvider::from_system_time();
+		// 		let slot =
+		// 			sp_consensus_babe::inherents::InherentDataProvider::from_timestamp_and_slot_duration(
+		// 				*timestamp,
+		// 				slot_duration,
+		// 			);
+		// 		Ok((slot, timestamp))
+		// 	},
+		// 	force_authoring,
+		// 	backoff_authoring_blocks,
+		// 	babe_link,
+		// 	block_proposal_slot_portion: SlotProportion::new(2f32 / 3f32),
+		// 	max_block_proposal_slot_portion: None,
+		// 	telemetry: telemetry.as_ref().map(|x| x.handle()),
+		// };
+
+		// let babe = sc_consensus_babe::start_babe(babe_params)?;
+
+		// task_manager.spawn_essential_handle().spawn_blocking(
+		// 	"babe-proposer",
+		// 	Some("block-authoring"),
+		// 	babe,
+		// );
+
+		// // std::mem::forget(babe_worker);
+		// task_manager.keep_alive(babe_worker);
+		let params = InstantSealParams {
 			block_import,
-			sync_oracle: sync_service.clone(),
-			justification_sync_link: sync_service.clone(),
+			env: proposer_factory,
+			client: client.clone(),
+			pool: transaction_pool.clone(),
+			select_chain,
+			consensus_data_provider: None,
 			create_inherent_data_providers: move |_, ()| async move {
 				let timestamp = sp_timestamp::InherentDataProvider::from_system_time();
 				let slot =
@@ -274,24 +326,13 @@ pub fn new_full<
 					);
 				Ok((slot, timestamp))
 			},
-			force_authoring,
-			backoff_authoring_blocks,
-			babe_link,
-			block_proposal_slot_portion: SlotProportion::new(2f32 / 3f32),
-			max_block_proposal_slot_portion: None,
-			telemetry: telemetry.as_ref().map(|x| x.handle()),
 		};
 
-		let babe = sc_consensus_babe::start_babe(babe_params)?;
-
 		task_manager.spawn_essential_handle().spawn_blocking(
-			"babe-proposer",
+			"instant-seal",
 			Some("block-authoring"),
-			babe,
+			run_instant_seal(params),
 		);
-
-		// std::mem::forget(babe_worker);
-		task_manager.keep_alive(babe_worker);
 	}
 
 	if enable_grandpa {

@@ -66,6 +66,7 @@ sc-consensus-babe-rpc.default-features = true
 sc-consensus-babe-rpc.workspace = true
 sc-consensus-epochs.default-features = true
 sc-consensus-epochs.workspace = true
+sc-consensus-manual-seal.workspace = true
 sp-consensus-babe.default-features = true
 sp-consensus-babe.workspace = true
 sp-consensus-grandpa.default-features = true

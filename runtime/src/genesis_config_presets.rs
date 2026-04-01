@@ -73,7 +73,7 @@ fn testnet_genesis(
 					} else if k == incentive_pool {
 						(k, INCENTIVE_POOL_PERCENT)
 					} else {
-						(k, 1 << 60)
+						(k, 1 << 100)
 						// (k, 50000 * UNIT)
 					}
 				})

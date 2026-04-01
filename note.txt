@@ -43,6 +43,13 @@ T>（普通动态数组） + 长度上限约束（由 S 定义），是 Substrat
 单节点
 ./target/release/solochain-template-node --dev
 ./target/release/solochain-template-node --dev --tmp
+./target/release/solochain-template-node --dev --tmp --db-cache 16
+
+./target/release/solochain-template-node --dev \
+    --base-path .././sub-real-data \
+    --db-cache 256 \
+    --rpc-max-subscriptions-per-connection 10000 \
+    --pool-limit 10000
 
 # 生成 Alice 的网络密钥
 mkdir -p /tmp/alice/chains/local_testnet/network
@@ -228,3 +235,4 @@ git的没有validator的版本，还是不行，各种版本都不行，
 
 pallet-dataassets::types::DataAssets有价格的字段，但是应该在授权市场的时候设置，所以下一步应该将这部分逻辑移到授权市场并且市场存储。
 pallet
+./target/release/solochain-template-node --dev --tmp

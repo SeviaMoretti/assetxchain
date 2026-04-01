@@ -178,11 +178,14 @@ impl<T: Config> Pallet<T> {
     pub fn process_collateral_releases(current_block: BlockNumberFor<T>) -> Weight {
         let mut weight = T::DbWeight::get().reads(1);
         let mut releases_processed = 0u32;
+        let mut items_evaluated = 0u32;
         
         // Iterate through all collateral entries
         // Note: In production, consider using a more efficient approach
         // such as a priority queue or scheduled tasks
+        // 遍历底层数据库中的所有资产的collateral信息!!!!!!!!!有问题
         for (asset_id, mut collateral_info) in AssetCollateral::<T>::iter() {
+            items_evaluated = items_evaluated.saturating_add(1);
             weight = weight.saturating_add(T::DbWeight::get().reads(1));
             
             let mut updated = false;
@@ -232,8 +235,10 @@ impl<T: Config> Pallet<T> {
                 weight = weight.saturating_add(T::DbWeight::get().writes(1));
             }
             
-            // 限制100个操作防止区块过载，应该根据实际权重调整
-            if releases_processed >= 100 {
+            // 限制100个操作防止区块过载，应该根据实际权重调整，但是遍历资产就很笨
+            // 无论有没有释放质押金，只要遍历超过 100 个资产，就强行打断！
+            // 防止 O(N) 遍历撑爆区块
+            if items_evaluated >= 100 {
                 break;
             }
         }

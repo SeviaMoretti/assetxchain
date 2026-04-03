@@ -34,7 +34,7 @@ mod benchmarking;
 pub use collateral::BalanceOf;
 
 // 需要和 runtime/src/lib.rs 中的对应值保持一致
-pub const MILLI_SECS_PER_BLOCK: u64 = 18000;
+pub const MILLI_SECS_PER_BLOCK: u64 = 6000;
 
 #[frame_support::pallet]
 pub mod pallet {
@@ -170,15 +170,15 @@ pub mod pallet {
         }
         
         fn on_finalize(_n: BlockNumberFor<T>) {
-            //计算asset root
-            let root = Self::compute_asset_root();
+            // 计算asset root,这是全资产状态树计算
+            // let root = Self::compute_asset_root();
             
-            //创建digest item并添加到区块头的digest中
-            let digest_item = crate::digest_item::create_asset_root_digest(root);
-            frame_system::Pallet::<T>::deposit_log(digest_item);
+            // 创建digest item并添加到区块头的digest中
+            // let digest_item = crate::digest_item::create_asset_root_digest(root);
+            // frame_system::Pallet::<T>::deposit_log(digest_item);
             
-            //事件
-            Self::deposit_event(Event::AssetRootUpdated { root });
+            // 事件
+            // Self::deposit_event(Event::AssetRootUpdated { root });
         }
     }
 

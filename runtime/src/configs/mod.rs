@@ -114,8 +114,8 @@ parameter_types! {
 
 // Session
 parameter_types! {
-    pub const Period: u32 = 10_000_000;
-    // pub const Period: u32 = 6 * HOURS; // 一个 session 6 小时
+    // pub const Period: u32 = 10_000_000;
+    pub const Period: u32 = 6 * HOURS; // 一个 session 6 小时
     pub const Offset: u32 = 0;
 }
 

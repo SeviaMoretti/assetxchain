@@ -162,12 +162,12 @@ pub mod pallet {
 
     #[pallet::hooks]
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
-        fn on_initialize(n: BlockNumberFor<T>) -> Weight {
-            // Process collateral releases
-            let release_weight = Self::process_collateral_releases(n);
+        // fn on_initialize(n: BlockNumberFor<T>) -> Weight {
+        //     // Process collateral releases
+        //     let release_weight = Self::process_collateral_releases(n);
             
-            release_weight
-        }
+        //     release_weight
+        // }
         
         fn on_finalize(_n: BlockNumberFor<T>) {
             // 计算asset root,这是全资产状态树计算
@@ -240,7 +240,9 @@ pub mod pallet {
             
             Self::insert_asset(&asset_id, &asset)?;
             Self::set_token_mapping(token_id, asset_id);
-            Self::initialize_certificate_trie(&asset_id);
+            // 一个元证一棵子树真实情况下可能有性能问题
+            // 之后改成一棵子树存元证一棵子树存权证
+            // Self::initialize_certificate_trie(&asset_id);
             
             // 首次创建奖励发放(捕捉错误，不阻断业务)
             if let Err(_) = T::IncentiveHandler::distribute_first_create_reward(&who, &asset_id) {
@@ -294,7 +296,6 @@ pub mod pallet {
             // certificate.token_id = RightToken::generate_token_id(asset.token_id, certificate_id);
 
             Self::insert_certificate(&asset_id, &certificate)?;
-            Self::update_asset_certificate_root(&asset_id)?;
             
             Self::deposit_event(Event::CertificateIssued { asset_id, certificate_id: certificate.certificate_id, issuer: asset.owner.clone(), holder });
             Ok(())
@@ -345,7 +346,6 @@ pub mod pallet {
             ensure!(asset.owner == who || cert.owner == who, Error::<T>::NotOwner);
             
             Self::remove_certificate(&asset_id, &certificate_id)?;
-            Self::update_asset_certificate_root(&asset_id)?;
             
             Self::deposit_event(Event::CertificateRevoked { asset_id, certificate_id });
             Ok(())
@@ -582,47 +582,37 @@ pub mod pallet {
             child::get::<[u8; 32]>(&child_info, &key)
         }
         
-        fn certificate_trie_info(asset_id: &[u8; 32]) -> sp_core::storage::ChildInfo {
-            let mut key = CERTIFICATE_TRIE_PREFIX.to_vec();
-            key.extend_from_slice(asset_id);
-            sp_core::storage::ChildInfo::new_default(&key)
-        }
-        
-        fn initialize_certificate_trie(asset_id: &[u8; 32]) {
-            let child_info = Self::certificate_trie_info(asset_id);
-            child::put(&child_info, b"_init", &[1u8]);
+        fn certificate_trie_info() -> sp_core::storage::ChildInfo {
+            sp_core::storage::ChildInfo::new_default(CERTIFICATE_TRIE_PREFIX)
         }
         
         fn insert_certificate(asset_id: &[u8; 32], cert: &RightToken<T::AccountId>) -> DispatchResult {
-            let child_info = Self::certificate_trie_info(asset_id);
-            child::put(&child_info, &cert.certificate_id[..], cert);
+            let child_info = Self::certificate_trie_info();
+            
+            // Key = asset_id (32 bytes) + certificate_id (32 bytes)
+            let mut storage_key = asset_id.to_vec();
+            storage_key.extend_from_slice(&cert.certificate_id[..]);
+            
+            child::put(&child_info, &storage_key, cert);
             Ok(())
         }
-        
+
         pub fn get_certificate(asset_id: &[u8; 32], cert_id: &[u8; 32]) -> Option<RightToken<T::AccountId>> {
-            let child_info = Self::certificate_trie_info(asset_id);
-            child::get::<RightToken<T::AccountId>>(&child_info, cert_id)
+            let child_info = Self::certificate_trie_info();
+            
+            let mut storage_key = asset_id.to_vec();
+            storage_key.extend_from_slice(cert_id);
+            
+            child::get::<RightToken<T::AccountId>>(&child_info, &storage_key)
         }
                 
         fn remove_certificate(asset_id: &[u8; 32], cert_id: &[u8; 32]) -> DispatchResult {
-            let child_info = Self::certificate_trie_info(asset_id);
-            child::kill(&child_info, cert_id);
-            Ok(())
-        }
-        
-        fn get_certificate_root(asset_id: &[u8; 32]) -> H256 {
-            let child_info = Self::certificate_trie_info(asset_id);
-            //child::root需要StateVersion参数
-            let root_bytes = child::root(&child_info, sp_core::storage::StateVersion::V1);
-            H256::from_slice(&root_bytes)
-        }
-        
-        fn update_asset_certificate_root(asset_id: &[u8; 32]) -> DispatchResult {
-            let mut asset = Self::get_asset(asset_id).ok_or(Error::<T>::AssetNotFound)?;
-            let cert_root = Self::get_certificate_root(asset_id);
-            asset.children_root = cert_root.into();
-            asset.updated_at = Self::current_timestamp();
-            Self::insert_asset(asset_id, &asset)?;
+            let child_info = Self::certificate_trie_info();
+            
+            let mut storage_key = asset_id.to_vec();
+            storage_key.extend_from_slice(cert_id);
+            
+            child::kill(&child_info, &storage_key);
             Ok(())
         }
         
@@ -630,8 +620,12 @@ pub mod pallet {
         // pub fn get_asset_certificates(asset_id: &[u8; 32]) -> Vec<RightToken<T::AccountId>> {
 
         fn get_next_certificate_id(asset_id: &[u8; 32]) -> u32 {
-            let child_info = Self::certificate_trie_info(asset_id);
-            let key = [METADATA_PREFIX, b"next_token_id"].concat();
+            let child_info = Self::certificate_trie_info();
+            
+            // Key = _metadata/next_token_id/ + asset_id
+            let mut key = METADATA_PREFIX.to_vec();
+            key.extend_from_slice(b"next_token_id/");
+            key.extend_from_slice(asset_id);
 
             let current = child::get::<u32>(&child_info, &key).unwrap_or(0);
             let next = current.saturating_add(1);

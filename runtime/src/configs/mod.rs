@@ -101,8 +101,8 @@ impl frame_system::Config for Runtime {
 parameter_types! {
     // Epoch 持续时间（slot 数量）
     // 2400 个 slot × 6 秒 = 4 小时一个 epoch
-    // pub const EpochDuration: u64 = 2400;
-    pub const EpochDuration: u64 = 10_000_000;
+    pub const EpochDuration: u64 = (6 * HOURS) as u64;
+    // pub const EpochDuration: u64 = 10_000_000;
     
     // 期望的区块时间（毫秒）
     pub const ExpectedBlockTime: u64 = MILLI_SECS_PER_BLOCK;

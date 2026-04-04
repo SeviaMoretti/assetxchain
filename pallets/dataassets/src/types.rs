@@ -53,7 +53,7 @@ pub struct DataAsset<AccountId> {
     pub encryption_info: EncryptionInfo,
     
     // Certificate sub-tree root hash
-    pub children_root: [u8; 32],
+    // pub children_root: [u8; 32],
     
     // Statistics
     pub view_count: u64,
@@ -264,7 +264,7 @@ impl<AccountId: Default> Default for DataAsset<AccountId> {
             nonce: 0,
             is_locked: false,
             encryption_info: EncryptionInfo::default(),
-            children_root: [0u8; 32],
+            // children_root: [0u8; 32],
             view_count: 0,
             transaction_count: 0,
             total_revenue: 0,
@@ -353,7 +353,7 @@ impl<AccountId: Clone> DataAsset<AccountId> {
 
 impl<AccountId: Clone> RightToken<AccountId> {
     /// Generate unique certificate ID
-    pub fn generate_certificate_id(parent_asset_id: &[u8; 32], timestamp: u64, issuer: &AccountId) -> [u8; 32] 
+    pub fn generate_certificate_id(parent_asset_id: &[u8; 32], timestamp: u64, issuer: &AccountId, token_id: u32) -> [u8; 32] 
     where 
         AccountId: Encode,
     {
@@ -363,6 +363,7 @@ impl<AccountId: Clone> RightToken<AccountId> {
         input.extend_from_slice(parent_asset_id);
         input.extend_from_slice(&timestamp.to_le_bytes());
         input.extend_from_slice(&issuer.encode());
+        input.extend_from_slice(&token_id.to_le_bytes()); // 唯一标识
         
         blake2_256(&input)
     }
@@ -434,7 +435,7 @@ impl<AccountId: Clone + Encode> DataAsset<AccountId> {
             },
             
             // Certificate root
-            children_root: [0u8; 32],
+            // children_root: [0u8; 32],
             
             // Statistics
             view_count: 0,
@@ -468,7 +469,7 @@ impl<AccountId: Clone + Encode> RightToken<AccountId> {
         current_time: u64,
         valid_until: Option<u64>
     ) -> Self {
-        let certificate_id = Self::generate_certificate_id(&parent_asset_id, current_time, &issuer);
+        let certificate_id = Self::generate_certificate_id(&parent_asset_id, current_time, &issuer, token_id);
         
         Self {
             // Protocol version

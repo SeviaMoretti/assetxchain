@@ -50,7 +50,7 @@ pub mod pallet {
     use crate::types::*;
 
     const ASSET_TRIE_ID: &[u8] = b":asset_trie:";
-    const CERTIFICATE_TRIE_PREFIX: &[u8] = b":certificate_trie:";
+    const CERTIFICATE_TRIE_ID: &[u8] = b":certificate_trie:";
     const METADATA_PREFIX: &[u8] = b"_metadata/";
 
     pub trait WeightInfo {
@@ -118,6 +118,22 @@ pub mod pallet {
         OptionQuery
     >;
 
+    /// Flag to track whether the child tries have been modified since last root computation.
+    /// Set to true on any write to asset or certificate tries; cleared in on_finalize.
+    #[pallet::storage]
+    pub type TrieModified<T: Config> = StorageValue<_, bool, ValueQuery>;
+
+    /// Agenda for collateral release processing, indexed by unlock block number.
+    /// Each entry holds asset_ids whose collateral phase unlocks at that block.
+    #[pallet::storage]
+    pub type CollateralReleaseAgenda<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        BlockNumberFor<T>,
+        BoundedVec<[u8; 32], ConstU32<100>>,
+        ValueQuery,
+    >;
+
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
@@ -126,6 +142,7 @@ pub mod pallet {
         AssetTransferred { asset_id: [u8; 32], from: T::AccountId, to: T::AccountId },
         CertificateRevoked { asset_id: [u8; 32], certificate_id: [u8; 32] },
         AssetRootUpdated { root: H256 },
+        CertificateRootUpdated { root: H256 },
         /// Collateral locked for asset
         CollateralLocked { asset_id: [u8; 32], depositor: T::AccountId, amount: BalanceOf<T> },
         /// Collateral released (phase completed)
@@ -162,23 +179,28 @@ pub mod pallet {
 
     #[pallet::hooks]
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
-        // fn on_initialize(n: BlockNumberFor<T>) -> Weight {
-        //     // Process collateral releases
-        //     let release_weight = Self::process_collateral_releases(n);
-            
-        //     release_weight
-        // }
-        
+        fn on_initialize(n: BlockNumberFor<T>) -> Weight {
+            Self::process_releases_at_block(n)
+        }
+
         fn on_finalize(_n: BlockNumberFor<T>) {
-            // 计算asset root,这是全资产状态树计算
-            // let root = Self::compute_asset_root();
-            
-            // 创建digest item并添加到区块头的digest中
-            // let digest_item = crate::digest_item::create_asset_root_digest(root);
-            // frame_system::Pallet::<T>::deposit_log(digest_item);
-            
-            // 事件
-            // Self::deposit_event(Event::AssetRootUpdated { root });
+            if !TrieModified::<T>::get() {
+                return;
+            }
+
+            let asset_root = Self::compute_asset_root();
+            let certificate_root = Self::compute_certificate_root();
+
+            let asset_digest_item = crate::digest_item::create_asset_root_digest(asset_root);
+            let certificate_digest_item = crate::digest_item::create_certificate_root_digest(certificate_root);
+
+            frame_system::Pallet::<T>::deposit_log(asset_digest_item);
+            frame_system::Pallet::<T>::deposit_log(certificate_digest_item);
+
+            Self::deposit_event(Event::AssetRootUpdated { root: asset_root });
+            Self::deposit_event(Event::CertificateRootUpdated { root: certificate_root });
+
+            TrieModified::<T>::set(false);
         }
     }
 
@@ -235,8 +257,8 @@ pub mod pallet {
             
             // 使用 minimal 构造函数
             let mut asset = DataAsset::minimal(who.clone(), name, description, raw_data_hash, timestamp,);
-            asset.asset_id = asset_id;
-            asset.token_id = token_id;
+            asset.core.asset_id = asset_id;
+            asset.core.token_id = token_id;
             
             Self::insert_asset(&asset_id, &asset)?;
             Self::set_token_mapping(token_id, asset_id);
@@ -267,7 +289,7 @@ pub mod pallet {
             let who = ensure_signed(origin)?;          
             let asset = Self::get_asset(&asset_id).ok_or(Error::<T>::AssetNotFound)?;
 
-            let is_owner = asset.owner == who;
+            let is_owner = asset.core.owner == who;
             let is_approved = Self::asset_approvals(&asset_id).map_or(false, |operator| operator == who);
             
             ensure!(is_owner || is_approved, Error::<T>::NotAuthorized);
@@ -288,7 +310,7 @@ pub mod pallet {
                 token_id,
                 right_type_enum,
                 holder.clone(), // 权证的购买者
-                asset.owner.clone(), // 元证持有者作为权证的发行者
+                asset.core.owner.clone(), // 元证持有者作为权证的发行者
                 asset_id,
                 current_time,
                 valid_until
@@ -297,7 +319,7 @@ pub mod pallet {
 
             Self::insert_certificate(&asset_id, &certificate)?;
             
-            Self::deposit_event(Event::CertificateIssued { asset_id, certificate_id: certificate.certificate_id, issuer: asset.owner.clone(), holder });
+            Self::deposit_event(Event::CertificateIssued { asset_id, certificate_id: certificate.certificate_id, issuer: asset.core.owner.clone(), holder });
             Ok(())
         }
 
@@ -311,15 +333,14 @@ pub mod pallet {
             let who = ensure_signed(origin)?;
             
             let mut asset = Self::get_asset(&asset_id).ok_or(Error::<T>::AssetNotFound)?;
-            ensure!(asset.owner == who, Error::<T>::NotOwner); // 在未被授权的时候，只有资产所有者才能转移资产
+            ensure!(asset.core.owner == who, Error::<T>::NotOwner); // 在未被授权的时候，只有资产所有者才能转移资产
             ensure!(!asset.is_locked(), Error::<T>::AssetLocked); // 锁定的资产不能转移
-            
-            let old_owner = asset.owner.clone();
-            asset.owner = new_owner.clone();
-            asset.nonce += 1;
-            asset.transaction_count += 1;
-            asset.updated_at = Self::current_timestamp();
-            // ！！！！没有修改资产状态
+            ensure!(!AssetApprovals::<T>::contains_key(&asset_id), Error::<T>::AlreadyAuthorized); // 授权后的资产只有授权的市场可以交易
+            let old_owner = asset.core.owner.clone();
+            asset.core.owner = new_owner.clone();
+            asset.core.nonce += 1;
+            asset.core.status = AssetStatus::Private;
+            asset.core.updated_at = Self::current_timestamp();
             Self::insert_asset(&asset_id, &asset)?;
             // 如果所有者自己转移资产，清除该资产上所有未完成的市场授权。确保授权记录不会残留。
             // 但是这样会导致市场方无法继续操作资产，必须重新授权。
@@ -343,7 +364,7 @@ pub mod pallet {
             let cert = Self::get_certificate(&asset_id, &certificate_id)
                 .ok_or(Error::<T>::CertificateNotFound)?;
             
-            ensure!(asset.owner == who || cert.owner == who, Error::<T>::NotOwner);
+            ensure!(asset.core.owner == who || cert.owner == who, Error::<T>::NotOwner);
             
             Self::remove_certificate(&asset_id, &certificate_id)?;
             
@@ -358,11 +379,10 @@ pub mod pallet {
             // let caller = Self::account_to_h160(&who);
             
             let mut asset = Self::get_asset(&asset_id).ok_or(Error::<T>::AssetNotFound)?;
-            ensure!(asset.owner == who, Error::<T>::NotOwner);
-            
-            asset.is_locked = true;
-            asset.status = AssetStatus::Locked;
-            asset.updated_at = Self::current_timestamp();
+            ensure!(asset.core.owner == who, Error::<T>::NotOwner);
+
+            asset.core.status = AssetStatus::Locked;
+            asset.core.updated_at = Self::current_timestamp();
             
             Self::insert_asset(&asset_id, &asset)?;
             Ok(())
@@ -375,11 +395,10 @@ pub mod pallet {
             // let caller = Self::account_to_h160(&who);
             
             let mut asset = Self::get_asset(&asset_id).ok_or(Error::<T>::AssetNotFound)?;
-            ensure!(asset.owner == who, Error::<T>::NotOwner);
-            
-            asset.is_locked = false;
-            asset.status = AssetStatus::Private;
-            asset.updated_at = Self::current_timestamp();
+            ensure!(asset.core.owner == who, Error::<T>::NotOwner);
+
+            asset.core.status = AssetStatus::Private;
+            asset.core.updated_at = Self::current_timestamp();
             
             Self::insert_asset(&asset_id, &asset)?;
             Ok(())
@@ -408,29 +427,19 @@ pub mod pallet {
             let who = ensure_signed(origin)?;
             
             // 验证资产存在且属于调用者
-            let mut asset = Self::get_asset(&asset_id).ok_or(Error::<T>::AssetNotFound)?;
-            ensure!(asset.owner == who, Error::<T>::NotOwner);
+            let asset = Self::get_asset(&asset_id).ok_or(Error::<T>::AssetNotFound)?;
+            ensure!(asset.core.owner == who, Error::<T>::NotOwner);
             ensure!(!asset.is_locked(), Error::<T>::AssetLocked); // 锁定资产不允许改变授权状态
-            ensure!(!asset.is_approved(), Error::<T>::AlreadyAuthorized); // 已被授权的资产不能再次授权
-            
-            // 防止重复授权给同一账户
-            if let Some(current_operator) = Self::asset_approvals(&asset_id) {
-                ensure!(current_operator != market_account, Error::<T>::AlreadyAuthorized);
-            }
+            ensure!(!AssetApprovals::<T>::contains_key(&asset_id), Error::<T>::AlreadyAuthorized); // 已被授权的资产不能再次授权
 
             // 存储授权信息
             AssetApprovals::<T>::insert(&asset_id, &market_account);
-            
-            // 修改资产状态
-            asset.status = AssetStatus::Approved;
-            asset.updated_at = Self::current_timestamp(); // 同步更新时间戳
-            Self::insert_asset(&asset_id, &asset)?; // 保存修改后的资产
 
             // 发出事件
-            Self::deposit_event(Event::AssetAuthorized { 
-                asset_id, 
-                owner: who, 
-                operator: market_account 
+            Self::deposit_event(Event::AssetAuthorized {
+                asset_id,
+                owner: who,
+                operator: market_account
             });
             
             Ok(())
@@ -445,19 +454,15 @@ pub mod pallet {
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
             
-            let mut asset = Self::get_asset(&asset_id).ok_or(Error::<T>::AssetNotFound)?;
-            ensure!(asset.owner == who, Error::<T>::NotOwner);
-            
+            let asset = Self::get_asset(&asset_id).ok_or(Error::<T>::AssetNotFound)?;
+            ensure!(asset.core.owner == who, Error::<T>::NotOwner);
+
             if AssetApprovals::<T>::contains_key(&asset_id) {
                 AssetApprovals::<T>::remove(&asset_id);
 
-                asset.status = AssetStatus::Private;
-                asset.updated_at = Self::current_timestamp(); // 同步更新时间戳
-                Self::insert_asset(&asset_id, &asset)?; // 保存修改后的资产
-
-                Self::deposit_event(Event::AuthorizationRevoked { 
-                    asset_id, 
-                    owner: who 
+                Self::deposit_event(Event::AuthorizationRevoked {
+                    asset_id,
+                    owner: who
                 });
             }
             
@@ -484,14 +489,13 @@ pub mod pallet {
             // 3. 检查资产状态
             ensure!(!asset.is_locked(), Error::<T>::AssetLocked);
             
-            let old_owner = asset.owner.clone();
-            
+            let old_owner = asset.core.owner.clone();
+
             // 4. 执行转移逻辑
-            asset.owner = new_owner.clone();
-            asset.nonce += 1;
-            asset.transaction_count += 1;
-            asset.updated_at = Self::current_timestamp();
-            asset.status = AssetStatus::Private;
+            asset.core.owner = new_owner.clone();
+            asset.core.nonce += 1;
+            asset.core.updated_at = Self::current_timestamp();
+            asset.core.status = AssetStatus::Private;
             
             // 5. 更新资产树
             Self::insert_asset(&asset_id, &asset)?;
@@ -516,6 +520,10 @@ pub mod pallet {
         fn asset_trie_info() -> sp_core::storage::ChildInfo {
             sp_core::storage::ChildInfo::new_default(ASSET_TRIE_ID)
         }
+
+        fn certificate_trie_info() -> sp_core::storage::ChildInfo {
+            sp_core::storage::ChildInfo::new_default(CERTIFICATE_TRIE_ID)
+        }
         
         fn make_asset_key(asset_id: &[u8; 32]) -> Vec<u8> {
             let mut key = b"assets/".to_vec();
@@ -523,10 +531,15 @@ pub mod pallet {
             key
         }
         
+        fn mark_trie_modified() {
+            TrieModified::<T>::set(true);
+        }
+
         pub fn insert_asset(asset_id: &[u8; 32], asset: &DataAsset<T::AccountId>) -> DispatchResult {
             let child_info = Self::asset_trie_info();
             let key = Self::make_asset_key(asset_id);
             child::put(&child_info, &key, asset);
+            Self::mark_trie_modified();
             Ok(())
         }
         
@@ -558,10 +571,11 @@ pub mod pallet {
         fn get_and_increment_token_id() -> u32 {
             let child_info = Self::asset_trie_info();
             let key = [METADATA_PREFIX, b"next_token_id"].concat();
-            
+
             let current = child::get::<u32>(&child_info, &key).unwrap_or(0);
             let next = current.saturating_add(1);
             child::put(&child_info, &key, &next);
+            Self::mark_trie_modified();
             current
         }
         
@@ -571,6 +585,7 @@ pub mod pallet {
             key.extend_from_slice(b"token_mappings/");
             key.extend_from_slice(&token_id.to_le_bytes());
             child::put(&child_info, &key, &asset_id);
+            Self::mark_trie_modified();
         }
         
         fn get_token_mapping(token_id: u32) -> Option<[u8; 32]> {
@@ -582,18 +597,15 @@ pub mod pallet {
             child::get::<[u8; 32]>(&child_info, &key)
         }
         
-        fn certificate_trie_info() -> sp_core::storage::ChildInfo {
-            sp_core::storage::ChildInfo::new_default(CERTIFICATE_TRIE_PREFIX)
-        }
-        
         fn insert_certificate(asset_id: &[u8; 32], cert: &RightToken<T::AccountId>) -> DispatchResult {
             let child_info = Self::certificate_trie_info();
-            
+
             // Key = asset_id (32 bytes) + certificate_id (32 bytes)
             let mut storage_key = asset_id.to_vec();
             storage_key.extend_from_slice(&cert.certificate_id[..]);
-            
+
             child::put(&child_info, &storage_key, cert);
+            Self::mark_trie_modified();
             Ok(())
         }
 
@@ -608,11 +620,12 @@ pub mod pallet {
                 
         fn remove_certificate(asset_id: &[u8; 32], cert_id: &[u8; 32]) -> DispatchResult {
             let child_info = Self::certificate_trie_info();
-            
+
             let mut storage_key = asset_id.to_vec();
             storage_key.extend_from_slice(cert_id);
-            
+
             child::kill(&child_info, &storage_key);
+            Self::mark_trie_modified();
             Ok(())
         }
         
@@ -621,7 +634,7 @@ pub mod pallet {
 
         fn get_next_certificate_id(asset_id: &[u8; 32]) -> u32 {
             let child_info = Self::certificate_trie_info();
-            
+
             // Key = _metadata/next_token_id/ + asset_id
             let mut key = METADATA_PREFIX.to_vec();
             key.extend_from_slice(b"next_token_id/");
@@ -630,11 +643,18 @@ pub mod pallet {
             let current = child::get::<u32>(&child_info, &key).unwrap_or(0);
             let next = current.saturating_add(1);
             child::put(&child_info, &key, &next);
+            Self::mark_trie_modified();
             current
         }
         
         pub fn compute_asset_root() -> H256 {
             let child_info = Self::asset_trie_info();
+            let root_bytes = child::root(&child_info, sp_core::storage::StateVersion::V1);
+            H256::from_slice(&root_bytes)
+        }
+
+        pub fn compute_certificate_root() -> H256 {
+            let child_info = Self::certificate_trie_info();
             let root_bytes = child::root(&child_info, sp_core::storage::StateVersion::V1);
             H256::from_slice(&root_bytes)
         }
@@ -660,12 +680,12 @@ pub mod pallet {
             ensure!(!asset.is_locked(), Error::<T>::AssetLocked);
             
             // 4. 执行转移
-            let old_owner = asset.owner.clone();
-            asset.owner = new_owner.clone();
-            asset.nonce += 1;
-            asset.transaction_count += 1;
-            asset.updated_at = Self::current_timestamp();
-            
+            let old_owner = asset.core.owner.clone();
+            asset.core.owner = new_owner.clone();
+            asset.core.nonce += 1;
+            asset.core.status = AssetStatus::Private;
+            asset.core.updated_at = Self::current_timestamp();
+
             // 5. 保存并清理授权
             Self::insert_asset(asset_id, &asset)?;
             AssetApprovals::<T>::remove(asset_id);
@@ -702,15 +722,15 @@ impl<T: Config> pallet_shared_traits::DataAssetProvider<T::AccountId, [u8; 32]> 
         let asset = Self::get_asset(asset_id)
             .ok_or(pallet_shared_traits::AssetQueryError::AssetNotFound)?;
         
-        if Self::is_zero_account(&asset.owner) {
+        if Self::is_zero_account(&asset.core.owner) {
             return Err(pallet_shared_traits::AssetQueryError::InvalidOwner);
         }
         
         // 可选：检查账户存在性
-        if !Self::account_exists(&asset.owner) {
+        if !Self::account_exists(&asset.core.owner) {
             return Err(pallet_shared_traits::AssetQueryError::OwnerAccountDoesNotExist);
         }
         
-        Ok(asset.owner)
+        Ok(asset.core.owner)
     }
 }

@@ -7,6 +7,7 @@ cat <<EOF > .dockerignore
 
 # 忽略做实验生成的各种数据库快照和压测脚本日志
 rocksdb_*/
+paritydb_*/
 geth_*/
 *.csv
 

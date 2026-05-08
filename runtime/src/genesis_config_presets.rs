@@ -152,6 +152,9 @@ fn testnet_genesis(
 				.try_into() // 转换为BoundedVec（处理长度超限错误）
 				.expect("初始验证者数量不超过MaxValidators"),
 		},
+		incentive: pallet_incentive::GenesisConfig {
+            _marker: Default::default(),
+        },
 	})
 }
 

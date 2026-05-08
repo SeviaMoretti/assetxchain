@@ -378,8 +378,8 @@ mod benchmarks {
             );
             
             // 补全特定字段
-            dummy_asset.asset_id = dummy_asset_id;
-            dummy_asset.token_id = i;
+            dummy_asset.core.asset_id = dummy_asset_id;
+            dummy_asset.core.token_id = i;
 
             // 调用 lib.rs 里的内部方法写入 Child Trie (注: benchmarking 和 lib 同属一个 crate，可直接访问此非 pub 方法)
             let _ = crate::Pallet::<T>::insert_asset(&dummy_asset_id, &dummy_asset);

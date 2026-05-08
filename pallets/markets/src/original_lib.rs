@@ -184,7 +184,7 @@ pub mod pallet {
             // 1. 验证资产所有权
             let asset = pallet_dataassets::Pallet::<T>::get_asset(&asset_id)
                 .ok_or(Error::<T>::AssetNotFound)?;
-            ensure!(asset.owner == seller, Error::<T>::NotOwner);
+            ensure!(asset.core.owner == seller, Error::<T>::NotOwner);
 
             // 2. 验证市场准入规则
             Self::check_access_rule(&market, &asset_id)?;

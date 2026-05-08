@@ -70,27 +70,21 @@ impl<T: Config> Pallet<T> {
     ) -> BoundedVec<ReleasePhase<BlockNumberFor<T>, BalanceOf<T>>, ConstU32<5>> {
         use sp_runtime::traits::CheckedDiv;
         
-        // Calculate phase amounts
+        // Phase 1: 50% of total
         let hundred: BalanceOf<T> = 100u32.into();
-        let base_release_amount = total_amount
-            // 计算：total_amount × 40%（先乘40，再除以100）
-            .saturating_mul(40u32.into())  // 避免乘法溢出
-            .checked_div(&hundred)         // 除法（处理除零，返回None时用0）
-            .unwrap_or_else(Zero::zero);   // 除零或错误时返回0
-        // Phase 1: 50%
-        let phase1_amount = base_release_amount
+        let phase1_amount = total_amount
             .saturating_mul(50u32.into())
             .checked_div(&hundred)
             .unwrap_or_else(Zero::zero);
-        
-        // Phase 2: 30%
-        let phase2_amount = base_release_amount
+
+        // Phase 2: 30% of total
+        let phase2_amount = total_amount
             .saturating_mul(30u32.into())
             .checked_div(&hundred)
             .unwrap_or_else(Zero::zero);
-        
-        // Phase 3: Remainder (handles rounding)
-        let phase3_amount = base_release_amount
+
+        // Phase 3: Remainder (20% of total, handles rounding)
+        let phase3_amount = total_amount
             .saturating_sub(phase1_amount)
             .saturating_sub(phase2_amount);
         
@@ -145,7 +139,15 @@ impl<T: Config> Pallet<T> {
         
         // Create release schedule
         let release_schedule = Self::create_release_schedule(collateral_amount, current_block);
-        
+
+        // Enqueue asset in the release agenda for each phase's unlock block
+        // Must be done before release_schedule is moved into CollateralInfo
+        for phase in &release_schedule {
+            CollateralReleaseAgenda::<T>::mutate(phase.unlock_block, |assets| {
+                let _ = assets.try_push(*asset_id);
+            });
+        }
+
         // Store collateral info
         let collateral_info = CollateralInfo {
             depositor: who.clone(),
@@ -155,9 +157,9 @@ impl<T: Config> Pallet<T> {
             release_schedule,
             status: CollateralStatus::FullyLocked,
         };
-        
+
         AssetCollateral::<T>::insert(asset_id, collateral_info);
-        
+
         // Emit event
         Self::deposit_event(Event::CollateralLocked {
             asset_id: *asset_id,
@@ -168,76 +170,85 @@ impl<T: Config> Pallet<T> {
         Ok(())
     }
     
-    /// Process collateral releases for all assets (called in on_initialize)
-    /// 
+    /// Process collateral releases due at the current block (called in on_initialize).
+    /// Uses an agenda indexed by unlock block to avoid full iteration over all assets.
+    ///
     /// # Arguments
     /// * `current_block` - Current block number
-    /// 
+    ///
     /// # Returns
     /// * Weight consumed by this operation
-    pub fn process_collateral_releases(current_block: BlockNumberFor<T>) -> Weight {
+    pub fn process_releases_at_block(current_block: BlockNumberFor<T>) -> Weight {
         let mut weight = T::DbWeight::get().reads(1);
-        let mut releases_processed = 0u32;
-        
-        // Iterate through all collateral entries
-        // Note: In production, consider using a more efficient approach
-        // such as a priority queue or scheduled tasks
-        for (asset_id, mut collateral_info) in AssetCollateral::<T>::iter() {
+
+        // Take the agenda for this block (clears storage, avoids re-processing)
+        let due_assets = CollateralReleaseAgenda::<T>::take(current_block);
+        if due_assets.is_empty() {
+            return weight;
+        }
+
+        for asset_id in due_assets.iter() {
             weight = weight.saturating_add(T::DbWeight::get().reads(1));
-            
-            let mut updated = false;
-            
-            // Check each release phase
-            for phase in collateral_info.release_schedule.iter_mut() {
-                // Skip if already released or not yet unlocked
-                if phase.is_released || current_block < phase.unlock_block {
-                    continue;
-                }
-                
-                // Check if release conditions are met
-                if Self::check_release_condition(&asset_id, &phase.condition) {
-                    // Attempt to unreserve (release) the collateral
-                    let unreserved = T::Currency::unreserve(&collateral_info.depositor, phase.amount);
-                    
-                    if unreserved == phase.amount {
-                        // Successfully released
-                        phase.is_released = true;
-                        collateral_info.released_amount = 
-                            collateral_info.released_amount.saturating_add(phase.amount);
-                        collateral_info.reserved_amount = 
-                            collateral_info.reserved_amount.saturating_sub(phase.amount);
-                        updated = true;
-                        releases_processed = releases_processed.saturating_add(1);
-                        
-                        // Emit event
-                        Self::deposit_event(Event::CollateralReleased {
-                            asset_id,
-                            amount: phase.amount,
-                            phase: phase.percentage,
-                        });
-                        
-                        weight = weight.saturating_add(T::DbWeight::get().writes(1));
+
+            if let Some(mut collateral_info) = AssetCollateral::<T>::get(asset_id) {
+                let mut updated = false;
+                let mut has_pending = false;
+
+                for phase in collateral_info.release_schedule.iter_mut() {
+                    if phase.is_released {
+                        continue;
+                    }
+                    if current_block < phase.unlock_block {
+                        has_pending = true;
+                        continue;
+                    }
+
+                    if Self::check_release_condition(asset_id, &phase.condition) {
+                        let unreserved = T::Currency::unreserve(
+                            &collateral_info.depositor,
+                            phase.amount,
+                        );
+                        if unreserved == phase.amount {
+                            phase.is_released = true;
+                            collateral_info.released_amount =
+                                collateral_info.released_amount.saturating_add(phase.amount);
+                            collateral_info.reserved_amount =
+                                collateral_info.reserved_amount.saturating_sub(phase.amount);
+                            updated = true;
+
+                            Self::deposit_event(Event::CollateralReleased {
+                                asset_id: *asset_id,
+                                amount: phase.amount,
+                                phase: phase.percentage,
+                            });
+                            weight = weight.saturating_add(T::DbWeight::get().writes(1));
+                        }
+                    } else {
+                        // Condition not yet met, re-enqueue for retry next block
+                        has_pending = true;
                     }
                 }
-            }
-            
-            // Update collateral status if changes were made
-            if updated {
-                if collateral_info.reserved_amount.is_zero() {
-                    collateral_info.status = CollateralStatus::FullyReleased;
-                } else {
-                    collateral_info.status = CollateralStatus::PartiallyReleased;
+
+                if updated {
+                    if collateral_info.reserved_amount.is_zero() {
+                        collateral_info.status = CollateralStatus::FullyReleased;
+                    } else {
+                        collateral_info.status = CollateralStatus::PartiallyReleased;
+                    }
+                    AssetCollateral::<T>::insert(asset_id, collateral_info);
+                    weight = weight.saturating_add(T::DbWeight::get().writes(1));
                 }
-                AssetCollateral::<T>::insert(asset_id, collateral_info);
-                weight = weight.saturating_add(T::DbWeight::get().writes(1));
-            }
-            
-            // 限制100个操作防止区块过载，应该根据实际权重调整
-            if releases_processed >= 100 {
-                break;
+
+                // Re-enqueue if any phase is still pending (failed condition check)
+                if has_pending {
+                    let next_block = current_block.saturating_add(1u32.into());
+                    CollateralReleaseAgenda::<T>::mutate(next_block, |assets| {
+                        let _ = assets.try_push(*asset_id);
+                    });
+                }
             }
         }
-        
+
         weight
     }
     
@@ -268,7 +279,7 @@ impl<T: Config> Pallet<T> {
                 // Check if asset has at least one certificate issued
                 if let Some(asset) = Self::get_asset(asset_id) {
                     // Check view count or transaction count as proxy for usage
-                    asset.view_count > 0 || asset.transaction_count > 0
+                    asset.statistics.view_count > 0 || asset.core.nonce > 0
                 } else {
                     false
                 }

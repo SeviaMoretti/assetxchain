@@ -14,7 +14,7 @@ members = [
     "pallets/incentive",
     "pallets/shared_traits",
     "runtime", 
-    "pallets/markets", "pallets/collaterals", "contracts/market_standard", "contracts/market_orderbook", "pallets/validator", "pallets/storage_ipfs",
+    "pallets/markets", "pallets/collaterals", "contracts/market_standard", "contracts/market_orderbook", "pallets/validator",
 ]
 
 exclude = [

@@ -280,6 +280,44 @@ pub mod pallet {
         InvalidParameterValue,
     }
 
+    // 定义创世配置结构体（留空即可，因为参数通过 config trait 获取）
+    #[pallet::genesis_config]
+    #[derive(frame_support::DefaultNoBound)]
+    pub struct GenesisConfig<T: Config> {
+        #[serde(skip)]
+        pub _marker: PhantomData<T>,
+    }
+
+    // 实现创世构建逻辑
+    #[pallet::genesis_build]
+    impl<T: Config> BuildGenesisConfig for GenesisConfig<T> {
+        fn build(&self) {
+            let pool_account = incentive_pool_account::<T>();
+            // 获取在 genesis_config_presets 中通过 balances 打入的真实余额
+            let expected_balance = <T as Config>::Currency::free_balance(&pool_account);
+            
+            if expected_balance.is_zero() {
+                log::error!("激励池初始余额为0，请检查 genesis balances 配置");
+                return;
+            }
+
+            // 执行首次释放（释放 1%）
+            let initial_release = T::DynamicReleaseRatio::get() * expected_balance;
+            let locked_amount = expected_balance.saturating_sub(initial_release);
+            
+            // 使用 reserve 机制锁定未释放部分
+            if let Err(e) = T::Currency::reserve(&pool_account, locked_amount) {
+                log::error!("创世阶段激励池资金锁定失败: {:?}", e);
+            }
+            
+            // 初始化内部逻辑变量
+            IncentivePoolReleased::<T>::put(initial_release);
+            IncentivePoolUsed::<T>::put(BalanceOf::<T>::zero());
+            IncentivePoolReserved::<T>::put(locked_amount);
+            LastMonthlyRewardBlock::<T>::put(BlockNumberFor::<T>::zero());
+        }
+    }
+
     // -------------------------- Hooks（周期性任务） --------------------------
     #[pallet::hooks]
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
@@ -298,49 +336,49 @@ pub mod pallet {
             weight
         }
 
-        /// 链启动时初始化辅助存储 、激励池初始化！！！！！！！！！！！！！
-        /// 创世块（区块0）的构建过程中，on_runtime_upgrade钩子是不会被调用的。on_runtime_upgrade只会在链上升级时调用
-        fn on_runtime_upgrade() -> Weight {
-            if StorageVersion::get::<Self>() < STORAGE_VERSION {
-                let pool_account = incentive_pool_account::<T>();
-                let actual_balance = <T as Config>::Currency::free_balance(&pool_account);
-                let expected_balance = T::InitialIncentivePool::get();
+        // /// 链启动时初始化辅助存储 、激励池初始化！！！！！！！！！！！！！
+        // /// 创世块（区块0）的构建过程中，on_runtime_upgrade钩子是不会被调用的。on_runtime_upgrade只会在链上升级时调用
+        // fn on_runtime_upgrade() -> Weight {
+        //     if StorageVersion::get::<Self>() < STORAGE_VERSION {
+        //         let pool_account = incentive_pool_account::<T>();
+        //         let actual_balance = <T as Config>::Currency::free_balance(&pool_account);
+        //         let expected_balance = T::InitialIncentivePool::get();
                 
-                if actual_balance != expected_balance {
-                    log::warn!("创世配置激励池余额与经济模型不一致");
-                }
+        //         if actual_balance != expected_balance {
+        //             log::warn!("创世配置激励池余额与经济模型不一致");
+        //         }
                 
-                // 执行首次释放（链启动时立即释放1%）
-                let initial_release = T::DynamicReleaseRatio::get() * expected_balance;
-                let locked_amount = expected_balance.saturating_sub(initial_release);
+        //         // 执行首次释放（链启动时立即释放1%）
+        //         let initial_release = T::DynamicReleaseRatio::get() * expected_balance;
+        //         let locked_amount = expected_balance.saturating_sub(initial_release);
                 
-                // 使用 reserve 机制锁定未释放部分（与质押模块相同）
-                if let Err(e) = T::Currency::reserve(&pool_account, locked_amount) {
-                    log::error!("激励池资金锁定失败: {:?}", e);
-                    // 继续执行，但记录错误
-                }
+        //         // 使用 reserve 机制锁定未释放部分（与质押模块相同）
+        //         if let Err(e) = T::Currency::reserve(&pool_account, locked_amount) {
+        //             log::error!("激励池资金锁定失败: {:?}", e);
+        //             // 继续执行，但记录错误
+        //         }
                 
-                IncentivePoolReleased::<T>::put(initial_release);
-                IncentivePoolUsed::<T>::put(BalanceOf::<T>::zero());
-                IncentivePoolReserved::<T>::put(locked_amount);
-                LastMonthlyRewardBlock::<T>::put(BlockNumberFor::<T>::zero());
-                StorageVersion::new(1).put::<Self>();
+        //         IncentivePoolReleased::<T>::put(initial_release);
+        //         IncentivePoolUsed::<T>::put(BalanceOf::<T>::zero());
+        //         IncentivePoolReserved::<T>::put(locked_amount);
+        //         LastMonthlyRewardBlock::<T>::put(BlockNumberFor::<T>::zero());
+        //         StorageVersion::new(1).put::<Self>();
                 
-                Self::deposit_event(Event::IncentivePoolInitialized { 
-                    balance: actual_balance,
-                    pool_account: pool_account.clone()
-                });
-                Self::deposit_event(Event::IncentivePoolReleased {
-                    amount: initial_release,
-                    new_balance: initial_release,
-                    pool_account: pool_account.clone(),
-                });
+        //         Self::deposit_event(Event::IncentivePoolInitialized { 
+        //             balance: actual_balance,
+        //             pool_account: pool_account.clone()
+        //         });
+        //         Self::deposit_event(Event::IncentivePoolReleased {
+        //             amount: initial_release,
+        //             new_balance: initial_release,
+        //             pool_account: pool_account.clone(),
+        //         });
                 
-                T::DbWeight::get().writes(4)
-            } else {
-                Weight::zero()
-            }
-        }
+        //         T::DbWeight::get().writes(4)
+        //     } else {
+        //         Weight::zero()
+        //     }
+        // }
     }
 
     // -------------------------- Call（外部调用接口） --------------------------

@@ -52,7 +52,7 @@ pub mod pallet {
     pub enum CollateralRole {
         DataCreator,        // 数据提供者，高频
         MarketOperator,     // 市场创建者，低频
-        IpfsProvider,       // IPFS服务提供者，低频
+        IpfsProvider,       // IPFS服务提供者-->存储链
         GovernancePledge,   // 验证节点，这里这个角色没用到，相关逻辑在validators_set-->pallet-staking
     }
 

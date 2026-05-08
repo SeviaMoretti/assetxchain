@@ -1,3 +1,5 @@
 target/
 rocksdb_1m/
 paritydb_1m/
+paritydb_1m_backup_100w/
+geth_data_1m/

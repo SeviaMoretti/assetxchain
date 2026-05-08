@@ -127,8 +127,8 @@ impl pallet_babe::Config for Runtime {
     type WeightInfo = ();
     type MaxAuthorities = frame_support::traits::ConstU32<32>;
     type MaxNominators = frame_support::traits::ConstU32<0>; // 暂时不使用 nominator
-    type KeyOwnerProof = sp_core::Void; // 简化
-    type EquivocationReportSystem = (); // 简化
+    type KeyOwnerProof = sp_core::Void;
+    type EquivocationReportSystem = ();
 }
 
 pub struct ValidatorIdOf;
@@ -144,6 +144,8 @@ impl pallet_session::Config for Runtime {
     type ValidatorIdOf = ValidatorIdOf;
     type ShouldEndSession = pallet_session::PeriodicSessions<Period, Offset>;
     type NextSessionRotation = pallet_session::PeriodicSessions<Period, Offset>;
+    // type ShouldEndSession = Babe; 
+    // type NextSessionRotation = Babe;
     type SessionManager = Validator;
     type SessionHandler = <SessionKeys as OpaqueKeys>::KeyTypeIdProviders;
     type Keys = SessionKeys;

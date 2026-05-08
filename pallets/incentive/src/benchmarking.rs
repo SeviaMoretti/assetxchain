@@ -60,7 +60,7 @@ benchmarks! {
             H256::repeat_byte(0x01),
             timestamp,
         );
-        asset.asset_id = asset_id;
+        asset.core.asset_id = asset_id;
 
         let child_info = ChildInfo::new_default(ASSET_TRIE_ID);
         let mut key = b"assets/".to_vec();

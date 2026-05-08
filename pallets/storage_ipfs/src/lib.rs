@@ -4,6 +4,7 @@
 ///数据存储、验证、激励、惩罚
 
 pub use pallet::*;
+pub mod types;
 
 #[frame_support::pallet]
 pub mod pallet {
@@ -60,6 +61,17 @@ pub mod pallet {
         pub proof_hash: H256,
     }
 
+    /// 资产ID -> 跨链存储订单映射
+    #[pallet::storage]
+    #[pallet::getter(fn storage_orders)]
+    pub type StorageOrders<T: Config> = StorageMap<
+        _, 
+        Blake2_128Concat, 
+        [u8; 32], // asset_id
+        StorageOrder<BalanceOf<T>, BlockNumberFor<T>>,
+        OptionQuery
+    >;
+
     #[pallet::storage]
     #[pallet::getter(fn providers)]
     pub type Providers<T: Config> = StorageMap<
@@ -108,105 +120,7 @@ pub mod pallet {
 
     #[pallet::call]
     impl<T: Config> Pallet<T> {
-
-        /// 1、服务商
-        /// register_provider (服务商注册)
-        /// update_capacity (容量扩容)
-        /// exit_provider (主动退出网络)
-        /// 2资产存储
-        /// register_ipfs_asset (注册存储资产)
-        /// 3
-        /// submit_storage_proof (提交存储证明)
-        /// verify_storage_challenge (OCW随机挑战)
-        /// 4
-        /// settle_reward (结算存储报酬)
-        /// slash_provider (惩罚服务商）
-
-        /// 注册成为 IPFS 存储服务商
-        #[pallet::call_index(0)]
-        #[pallet::weight(10_000)]
-        pub fn register_provider(
-            origin: OriginFor<T>,
-            endpoint: Vec<u8>,
-            pledge_amount: BalanceOf<T>,// 根据容量需求计算质押金额
-        ) -> DispatchResult {
-            let who = ensure_signed(origin)?;
-            
-            ensure!(!Providers::<T>::contains_key(&who), Error::<T>::ProviderAlreadyExists);
-            
-            let bounded_endpoint: BoundedVec<u8, ConstU32<128>> = 
-                endpoint.clone().try_into().map_err(|_| Error::<T>::InvalidEndpoint)?;
-
-            // 调用 pallet-collaterals 执行质押逻辑
-            // 注意：需要 pallet-collaterals 的 internal_pledge 是 pub 的
-            CollateralPallet::<T>::internal_pledge(
-                &who, 
-                CollateralRole::IpfsProvider, 
-                pledge_amount
-            )?;
-
-            Providers::<T>::insert(&who, ProviderInfo {
-                endpoint: bounded_endpoint,
-                capacity: 0,
-                pledged_amount: pledge_amount,
-                registered_at: frame_system::Pallet::<T>::block_number(),
-                is_active: true,
-            });
-
-            Self::deposit_event(Event::ProviderRegistered { who, endpoint });
-            Ok(())
-        }
-
-        /// 作为代理入口注册 IPFS 资产
-        #[pallet::call_index(1)]
-        #[pallet::weight(10_000)]
-        pub fn register_ipfs_asset(
-            origin: OriginFor<T>,
-            name: Vec<u8>,
-            description: Vec<u8>,
-            metadata_cid: Vec<u8>,
-            raw_data_hash: H256,
-            data_size_bytes: u64,
-            encryption_info: EncryptionInfo,
-        ) -> DispatchResult {
-            let who = ensure_signed(origin)?;
-
-            // 1. 基础验证（可选，如验证 CID 格式）
-            
-            // 2. 调用 pallet-dataassets 进行核心资产注册逻辑
-            T::AssetHandler::register_asset(
-                who,
-                name,
-                description,
-                raw_data_hash,
-                data_size_bytes,
-                metadata_cid,
-                encryption_info,
-            )?;
-
-            Ok(())
-        }
-
-        /// 存储提供者提交存储证明
-        #[pallet::call_index(2)]
-        #[pallet::weight(10_000)]
-        pub fn submit_storage_proof(
-            origin: OriginFor<T>,
-            asset_id: [u8; 32],
-            proof_hash: H256,
-        ) -> DispatchResult {
-            let who = ensure_signed(origin)?;
-            
-            ensure!(Providers::<T>::contains_key(&who), Error::<T>::NotAProvider);
-            
-            // 记录证明
-            StorageProofs::<T>::insert(asset_id, &who, StorageProof {
-                last_proof_block: frame_system::Pallet::<T>::block_number(),
-                proof_hash,
-            });
-
-            Self::deposit_event(Event::ProofSubmitted { asset_id, provider: who });
-            Ok(())
-        }
+        
     }
+
 }

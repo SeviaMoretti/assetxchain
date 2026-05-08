@@ -26,26 +26,10 @@ CID 校验：验证传入的CID格式是否合法。
 加密->raw_data_hash,data_size_bytes,encryption_info
 上传ipfs->cid
 
+CID映射管理：维护AssetID与IPFS CID的绑定关系，从主树读
+跨链资金代扣：锁定用户的主链代币，或通过跨链资产交易（DEX机制）兑换存储链代币。
+构造 XCM 指令：将用户的存储需求打包成标准XCM消息，发送给存储平行链。
+异步状态接收：接收来自存储平行链的XCM回调消息（存储成功、存储失效、订单过期）。
 
-register_provider(origin, endpoint) // 注册成为ipfs服务提供者（但是还得定期给他挑战，验证是否还存储着数据）
-    origin: 签名账户（提供者账户）
-    endpoint: Vec<u8>，节点的 IPFS 多地址（Multiaddr），方便客户端连接 
-    调用pallet-collaterals：：pledge/unbond
+存储证明这些不是由交易链负责，应该使用跨链消息传递与存储链对接（存储链作为之前的存储服务提供者）
 
-register_ipfs_asset(origin, name, description, metadata_cid, raw_data_hash, data_size_bytes, encryption_info)
-    name, description: 资产信息
-    *metadata_cid*: Vec<u8>，IPFS 元数据地址
-    raw_data_hash: H256，加密数据的哈希，用于完整性校验
-    data_size_bytes: u64，文件大小，用于计算质押金
-    encryption_info: EncryptionInfo 结构体，包含算法、参数哈希等（加密密钥怎么保存）
-    调用pallet-dataassets::register_asset
-    asset_id -> provider 映射 存储证明
-
-submit_storage_proof(origin, asset_id, proof_data) // provider定期提供证明（分片证明（基于merkle tree）/简单的心跳）
-    asset_id: [u8; 32]，资产唯一 ID
-    proof_data: Vec<u8>，链下计算生成的证明数据
-
-verify_storage_challenge(origin, asset_id)
-    自动触发。OffChainWorker随机挑选资产，通过IPFS检查CID是否可达
-
-settle_reward(origin, asset_id) // 存储提供者领取其通过证明获得的存储报酬（1、先从资产的子账户，若没有了；2、从质押金中扣，直到质押金低于某一额度）

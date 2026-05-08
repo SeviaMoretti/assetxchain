@@ -132,6 +132,8 @@ pub mod pallet {
             Self::deposit_event(Event::ValidatorRemoved(who));
             Ok(())
         }
+
+        // 验证节点质押调整
     }
 
     // 对接Session模块

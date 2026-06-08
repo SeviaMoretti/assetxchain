@@ -1,239 +1,226 @@
-# Substrate Node Template
+# AssetXChain
 
-A fresh [Substrate](https://substrate.io/) node, ready for hacking :rocket:
+AssetXChain is a Substrate-based solo chain for data asset ownership,
+certificate issuance, collateral management, incentive distribution, and market
+contract integration.
 
-A standalone version of this template is available for each release of Polkadot
-in the [Substrate Developer Hub Parachain
-Template](https://github.com/substrate-developer-hub/substrate-node-template/)
-repository. The parachain template is generated directly at each Polkadot
-release branch from the [Solochain Template in
-Substrate](https://github.com/paritytech/polkadot-sdk/tree/master/templates/solochain)
-upstream
+The chain is built from the Substrate solochain template, but the runtime has
+been extended with custom pallets for data asset state, right-token
+certificates, market registration, ecosystem incentives, block rewards,
+collateral roles, and validator management.
 
-It is usually best to use the stand-alone version to start a new project. All
-bugs, suggestions, and feature requests should be made upstream in the
-[Substrate](https://github.com/paritytech/polkadot-sdk/tree/master/substrate)
-repository.
+## Project Status
 
-## Getting Started
+This repository is an active development chain. It already contains the core
+runtime and pallet architecture for data asset registration and circulation, but
+some modules remain prototypes or placeholders.
 
-Depending on your operating system and Rust version, there might be additional
-packages required to compile this template. Check the
-[Install](https://docs.substrate.io/install/) instructions for your platform for
-the most common dependencies. Alternatively, you can use one of the [alternative
-installation](#alternatives-installations) options.
+Implemented core capabilities:
 
-Fetch solochain template code:
+- Register data assets as on-chain ownership certificates.
+- Issue and transfer right-token certificates for existing data assets.
+- Store data asset and certificate state in independent child tries.
+- Compute asset and certificate state roots and write them into block digests.
+- Lock, release, and slash collateral associated with data asset registration.
+- Register market contracts and let approved market contracts transfer assets
+  through a runtime chain extension.
+- Maintain an ecosystem incentive pool and block reward model.
+- Run a BABE + GRANDPA solo chain with session-based validators.
+- Expose custom RPC support for data asset storage proofs.
 
-```sh
-git clone https://github.com/paritytech/polkadot-sdk-solochain-template.git solochain-template
+Known in-progress areas:
 
-cd solochain-template
+- The IPFS storage pallet is present as a prototype and is not currently wired
+  into the runtime.
+- The market contract path supports asset transfer; certificate transfer through
+  the chain extension is not fully implemented.
+- A custom header type with an `asset_root` field exists, but the current runtime
+  still uses the standard Substrate generic header and exposes asset roots
+  through digests.
+- Some incentive, storage-availability, and governance workflows contain
+  placeholder logic that still needs production integration.
+
+For a fuller architecture description, see
+[docs/project-overview.md](./docs/project-overview.md).
+
+## Repository Layout
+
+```text
+assetxchain/
+  node/                 Substrate node service, CLI, chain specs, RPC wiring
+  runtime/              Runtime composition, pallet configs, runtime APIs
+  pallets/
+    dataassets/         Core data asset and certificate state pallet
+    incentive/          Ecosystem incentive pool and reward statistics
+    rewards/            Per-block issuance rewards
+    markets/            Market contract registration and verification
+    collaterals/        Role-based collateral and slashing logic
+    validator/          Validator set management for sessions
+    shared_traits/      Cross-pallet traits
+    storage_ipfs/       IPFS/storage-order prototype, not runtime-wired
+    template/           Original Substrate example pallet
+  contracts/
+    market_standard/    ink! market interface and chain extension bindings
+    market_orderbook/   ink! order-book market prototype
+    zhushui/            Traditional single-contract asset storage prototype
+  docs/                 Project and environment documentation
+  env-setup/            Rust and Nix environment setup files
 ```
 
-### Build
+Generated output and local chain data, such as `target/`, `geth_data_1m/`, and
+prebuilt binaries under `docker_bin/`, are not the main source of project logic.
 
-🔨 Use the following command to build the node without launching it:
+## Build
+
+Install the Rust/Substrate build environment first. The existing environment
+notes are in [docs/rust-setup.md](./docs/rust-setup.md).
+
+Build the node:
 
 ```sh
 cargo build --release
 ```
 
-### Embedded Docs
-
-After you build the project, you can use the following command to explore its
-parameters and subcommands:
+The binary is currently still named after the original template:
 
 ```sh
-./target/release/solochain-template-node -h
+./target/release/solochain-template-node --help
 ```
 
-You can generate and view the [Rust
-Docs](https://doc.rust-lang.org/cargo/commands/cargo-doc.html) for this template
-with this command:
+## Run A Development Chain
+
+Start a temporary single-node development chain:
 
 ```sh
-cargo +nightly doc --open
+./target/release/solochain-template-node --dev --tmp
 ```
 
-### Single-Node Development Chain
-
-The following command starts a single-node development chain that doesn't
-persist state:
+Start with persistent state:
 
 ```sh
-./target/release/solochain-template-node --dev
+mkdir -p ./dev-chain-state
+./target/release/solochain-template-node --dev --base-path ./dev-chain-state
 ```
 
-To purge the development chain's state, run the following command:
+Purge development state:
 
 ```sh
 ./target/release/solochain-template-node purge-chain --dev
 ```
 
-To start the development chain with detailed logging, run the following command:
+Run with debug logs:
 
 ```sh
 RUST_BACKTRACE=1 ./target/release/solochain-template-node -ldebug --dev
 ```
 
-Development chains:
+After the node starts, connect Polkadot-JS Apps to:
 
-- Maintain state in a `tmp` folder while the node is running.
-- Use the **Alice** and **Bob** accounts as default validator authorities.
-- Use the **Alice** account as the default `sudo` account.
-- Are preconfigured with a genesis state (`/node/src/chain_spec.rs`) that
-  includes several pre-funded development accounts.
-
-
-To persist chain state between runs, specify a base path by running a command
-similar to the following:
-
-```sh
-// Create a folder to use as the db base path
-$ mkdir my-chain-state
-
-// Use of that folder to store the chain state
-$ ./target/release/solochain-template-node --dev --base-path ./my-chain-state/
-
-// Check the folder structure created inside the base path after running the chain
-$ ls ./my-chain-state
-chains
-$ ls ./my-chain-state/chains/
-dev
-$ ls ./my-chain-state/chains/dev
-db keystore network
+```text
+ws://localhost:9944
 ```
 
-### Connect with Polkadot-JS Apps Front-End
+## Local Testnet
 
-After you start the node template locally, you can interact with it using the
-hosted version of the [Polkadot/Substrate
-Portal](https://polkadot.js.org/apps/#/explorer?rpc=ws://localhost:9944)
-front-end by connecting to the local node endpoint. A hosted version is also
-available on [IPFS](https://dotapps.io/). You can
-also find the source code and instructions for hosting your own instance in the
-[`polkadot-js/apps`](https://github.com/polkadot-js/apps) repository.
+The node supports the standard `dev` and `local` chain spec presets:
 
-### Multi-Node Local Testnet
+```sh
+./target/release/solochain-template-node --chain local --alice --validator \
+  --base-path /tmp/assetx-alice \
+  --port 30333 \
+  --rpc-port 9944 \
+  --rpc-methods unsafe \
+  --rpc-cors all
+```
 
-If you want to see the multi-node consensus algorithm in action, see [Simulate a
-network](https://docs.substrate.io/tutorials/build-a-blockchain/simulate-network/).
+A second local validator can be started with Bob and a bootnode pointing to the
+Alice node.
 
-## Template Structure
+## Core Runtime Modules
 
-A Substrate project such as this consists of a number of components that are
-spread across a few directories.
+### Data Assets
 
-### Node
+`pallet-dataassets` is the central business pallet. It manages:
 
-A blockchain node is an application that allows users to participate in a
-blockchain network. Substrate-based blockchain nodes expose a number of
-capabilities:
+- Data asset registration.
+- Data asset transfer and lock/unlock state.
+- Right-token certificate issuance, revocation, and transfer.
+- Asset-to-market authorization.
+- Asset child trie and certificate child trie storage.
+- Asset root and certificate root digest updates.
+- Data asset collateral locking, phased release, and slashing.
 
-- Networking: Substrate nodes use the [`libp2p`](https://libp2p.io/) networking
-  stack to allow the nodes in the network to communicate with one another.
-- Consensus: Blockchains must have a way to come to
-  [consensus](https://docs.substrate.io/fundamentals/consensus/) on the state of
-  the network. Substrate makes it possible to supply custom consensus engines
-  and also ships with several consensus mechanisms that have been built on top
-  of [Web3 Foundation
-  research](https://research.web3.foundation/Polkadot/protocols/NPoS).
-- RPC Server: A remote procedure call (RPC) server is used to interact with
-  Substrate nodes.
+### Market Contracts
 
-There are several files in the `node` directory. Take special note of the
-following:
+`pallet-markets` registers ink! market contracts. A market creator locks market
+operator collateral, then the pallet verifies the contract by calling its
+`is_assetx_market()` message through `pallet-contracts`.
 
-- [`chain_spec.rs`](./node/src/chain_spec.rs): A [chain
-  specification](https://docs.substrate.io/build/chain-spec/) is a source code
-  file that defines a Substrate chain's initial (genesis) state. Chain
-  specifications are useful for development and testing, and critical when
-  architecting the launch of a production chain. Take note of the
-  `development_config` and `testnet_genesis` functions. These functions are
-  used to define the genesis state for the local development chain
-  configuration. These functions identify some [well-known
-  accounts](https://docs.substrate.io/reference/command-line-tools/subkey/) and
-  use them to configure the blockchain's initial state.
-- [`service.rs`](./node/src/service.rs): This file defines the node
-  implementation. Take note of the libraries that this file imports and the
-  names of the functions it invokes. In particular, there are references to
-  consensus-related topics, such as the [block finalization and
-  forks](https://docs.substrate.io/fundamentals/consensus/#finalization-and-forks)
-  and other [consensus
-  mechanisms](https://docs.substrate.io/fundamentals/consensus/#default-consensus-models)
-  such as Aura for block authoring and GRANDPA for finality.
+Market contracts can call the runtime chain extension to transfer an authorized
+data asset to a buyer. Asset ownership still changes in the runtime, not inside
+the contract storage.
 
+### Incentives And Rewards
 
-### Runtime
+`pallet-rewards` mints per-block rewards to the current block author until the
+configured mining reward supply is exhausted.
 
-In Substrate, the terms "runtime" and "state transition function" are analogous.
-Both terms refer to the core logic of the blockchain that is responsible for
-validating blocks and executing the state changes they define. The Substrate
-project in this repository uses
-[FRAME](https://docs.substrate.io/learn/runtime-development/#frame) to construct
-a blockchain runtime. FRAME allows runtime developers to declare domain-specific
-logic in modules called "pallets". At the heart of FRAME is a helpful [macro
-language](https://docs.substrate.io/reference/frame-macros/) that makes it easy
-to create pallets and flexibly compose them to create blockchains that can
-address [a variety of needs](https://substrate.io/ecosystem/projects/).
+`pallet-incentive` manages the ecosystem incentive pool. It supports dynamic
+pool release, first-create rewards, quality data rewards, market rewards,
+trader rebates, liquidity rewards, and governance reward bookkeeping.
 
-Review the [FRAME runtime implementation](./runtime/src/lib.rs) included in this
-template and note the following:
+### Collateral And Validators
 
-- This file configures several pallets to include in the runtime. Each pallet
-  configuration is defined by a code block that begins with `impl
-  $PALLET_NAME::Config for Runtime`.
-- The pallets are composed into a single runtime by way of the
-  [#[runtime]](https://paritytech.github.io/polkadot-sdk/master/frame_support/attr.runtime.html)
-  macro, which is part of the [core FRAME pallet
-  library](https://docs.substrate.io/reference/frame-pallets/#system-pallets).
+`pallet-collaterals` provides role-based collateral for market operators, IPFS
+providers, governance pledges, and related slashing distribution.
 
-### Pallets
+`pallet-validator` manages the validator set used by `pallet-session`, and the
+runtime uses BABE for block production and GRANDPA for finality.
 
-The runtime in this project is constructed using many FRAME pallets that ship
-with [the Substrate
-repository](https://github.com/paritytech/polkadot-sdk/tree/master/substrate/frame) and a
-template pallet that is [defined in the
-`pallets`](./pallets/template/src/lib.rs) directory.
+## Runtime APIs And RPC
 
-A FRAME pallet is comprised of a number of blockchain primitives, including:
+The runtime exposes a `DataAssetsApi` with methods for:
 
-- Storage: FRAME defines a rich set of powerful [storage
-  abstractions](https://docs.substrate.io/build/runtime-storage/) that makes it
-  easy to use Substrate's efficient key-value database to manage the evolving
-  state of a blockchain.
-- Dispatchables: FRAME pallets define special types of functions that can be
-  invoked (dispatched) from outside of the runtime in order to update its state.
-- Events: Substrate uses
-  [events](https://docs.substrate.io/build/events-and-errors/) to notify users
-  of significant state changes.
-- Errors: When a dispatchable fails, it returns an error.
+- `get_asset(asset_id)`
+- `get_asset_by_token_id(token_id)`
+- `get_certificate(asset_id, cert_id)`
+- `get_asset_root()`
 
-Each pallet has its own `Config` trait which serves as a configuration interface
-to generically define the types and parameters it depends on.
+The node also registers a custom RPC method:
 
-## Alternatives Installations
+```text
+dataAssets_getAssetProof(asset_id, at)
+```
 
-Instead of installing dependencies and building this source directly, consider
-the following alternatives.
+This RPC generates a read proof for an asset stored in the asset child trie.
 
-### Nix
+## Benchmarks
 
-Install [nix](https://nixos.org/) and
-[nix-direnv](https://github.com/nix-community/nix-direnv) for a fully
-plug-and-play experience for setting up the development environment. To get all
-the correct dependencies, activate direnv `direnv allow`.
+Build with runtime benchmarks:
 
-### Docker
+```sh
+cargo build --release --features runtime-benchmarks
+```
 
-Please follow the [Substrate Docker instructions
-here](https://github.com/paritytech/polkadot-sdk/blob/master/substrate/docker/README.md) to
-build the Docker container with the Substrate Node Template binary.
+Example pallet benchmark command:
 
-pallet-staking：用户质押 / 提名 → 选举出验证人集合；
-pallet-session：基于选举结果，生成新的会话（Epoch）验证人列表；
-pallet-babe：基于验证人权益和 VRF 随机数，分配每个 Slot 的出块权 → 生产区块；
-pallet-authorship：记录出块人 → 汇总区块奖励；
-pallet-grandpa：验证人对 BABE 生产的区块投票 → 确认最终性；
-pallet-staking/pallet-authorship：将奖励分配给出块人 / 提名者（部分通过 pallet-vesting 分期解锁）。
+```sh
+./target/release/solochain-template-node benchmark pallet \
+  --chain dev \
+  --pallet pallet_dataassets \
+  --extrinsic "*" \
+  --steps 50 \
+  --repeat 20 \
+  --output pallets/dataassets/src/weights.rs
+```
+
+## Documentation
+
+- [docs/project-overview.md](./docs/project-overview.md): architecture and
+  module responsibilities.
+- [docs/development-automation.md](./docs/development-automation.md): execution
+  guide for Codex or other development agents.
+- [docs/rust-setup.md](./docs/rust-setup.md): Rust/Substrate development
+  environment setup.
+- [note.txt](./note.txt): development notes and command snippets.
+- [sto_ipfs.note](./sto_ipfs.note): IPFS/storage-chain design notes.

@@ -66,6 +66,26 @@ impl<T: frame_system::Config> crate::pallet::WeightInfo for WeightInfo<T> {
 			.saturating_add(T::DbWeight::get().reads(7))
 			.saturating_add(T::DbWeight::get().writes(6))
 	}
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
+	/// Storage: UNKNOWN KEY `0x6173736574732fc008023d5802a250b3ad74741b8ba83cd40ecb3a9db0b03072` (r:1 w:1)
+	/// Proof: UNKNOWN KEY `0x6173736574732fc008023d5802a250b3ad74741b8ba83cd40ecb3a9db0b03072` (r:1 w:1)
+	/// Storage: UNKNOWN KEY `0x5f6d657461646174612f6e6578745f746f6b656e5f6964` (r:1 w:1)
+	/// Proof: UNKNOWN KEY `0x5f6d657461646174612f6e6578745f746f6b656e5f6964` (r:1 w:1)
+	/// Storage: UNKNOWN KEY `0x5f6d657461646174612f746f6b656e5f6d617070696e67732f00000000` (r:0 w:1)
+	/// Proof: UNKNOWN KEY `0x5f6d657461646174612f746f6b656e5f6d617070696e67732f00000000` (r:0 w:1)
+	/// Storage: UNKNOWN KEY `0x5f696e6974` (r:0 w:1)
+	/// Proof: UNKNOWN KEY `0x5f696e6974` (r:0 w:1)
+	fn register_asset_core() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `118`
+		//  Estimated: `1992`
+		// Minimum execution time: 31_292_000 picoseconds.
+		Weight::from_parts(45_073_000, 0)
+			.saturating_add(Weight::from_parts(0, 1992))
+			.saturating_add(T::DbWeight::get().reads(3))
+			.saturating_add(T::DbWeight::get().writes(4))
+	}
 	/// Storage: `DataAssets::AssetApprovals` (r:1 w:0)
 	/// Proof: `DataAssets::AssetApprovals` (`max_values`: None, `max_size`: Some(80), added: 2555, mode: `MaxEncodedLen`)
 	/// Storage: `Timestamp::Now` (r:1 w:0)
@@ -87,6 +107,12 @@ impl<T: frame_system::Config> crate::pallet::WeightInfo for WeightInfo<T> {
 			.saturating_add(Weight::from_parts(0, 4091))
 			.saturating_add(T::DbWeight::get().reads(4))
 			.saturating_add(T::DbWeight::get().writes(4))
+	}
+	fn transfer_certificate() -> Weight {
+		Weight::from_parts(36_334_000, 0)
+			.saturating_add(Weight::from_parts(0, 4284))
+			.saturating_add(T::DbWeight::get().reads(3))
+			.saturating_add(T::DbWeight::get().writes(2))
 	}
 	/// Storage: `Timestamp::Now` (r:1 w:0)
 	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)

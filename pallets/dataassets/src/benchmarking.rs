@@ -50,6 +50,26 @@ mod benchmarks {
     }
 
     #[benchmark]
+    fn register_asset_core() {
+        let caller = create_funded_account::<T>("caller", 0);
+        let name = vec![b'T'; T::MaxNameLength::get() as usize];
+        let description = vec![b'D'; T::MaxDescriptionLength::get() as usize];
+        let raw_data_hash = H256::repeat_byte(0x02);
+        let data_size_bytes = 1024 * 1024;
+
+        #[extrinsic_call]
+        register_asset_core(
+            RawOrigin::Signed(caller.clone()),
+            name,
+            description,
+            raw_data_hash,
+            data_size_bytes,
+        );
+
+        assert!(frame_system::Pallet::<T>::events().len() > 0);
+    }
+
+    #[benchmark]
     fn issue_certificate() {
         // 先注册资产
         let owner = create_funded_account::<T>("owner", 0);
@@ -172,6 +192,7 @@ mod benchmarks {
             &asset_id,
             timestamp,  // 使用同一个时间戳
             &owner,     // 使用 owner 作为 issuer (不是 holder!)
+            0u32,
         );
 
         #[extrinsic_call]

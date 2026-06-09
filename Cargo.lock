@@ -6724,6 +6724,7 @@ dependencies = [
  "scale-info",
  "sp-runtime",
  "sp-std",
+ "tokio",
 ]
 
 [[package]]

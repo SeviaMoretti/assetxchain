@@ -6561,10 +6561,14 @@ dependencies = [
  "frame-benchmarking",
  "frame-support",
  "frame-system",
+ "pallet-balances",
  "parity-scale-codec",
  "scale-info",
+ "sp-core",
+ "sp-io",
  "sp-runtime",
  "sp-std",
+ "tokio",
 ]
 
 [[package]]
@@ -6700,6 +6704,7 @@ dependencies = [
  "frame-system",
  "hex-literal 1.1.0",
  "log",
+ "pallet-balances",
  "pallet-dataassets",
  "pallet-shared-traits",
  "pallet-timestamp",
@@ -6709,6 +6714,7 @@ dependencies = [
  "sp-io",
  "sp-runtime",
  "sp-std",
+ "tokio",
 ]
 
 [[package]]
@@ -6771,6 +6777,7 @@ dependencies = [
  "sp-core",
  "sp-io",
  "sp-runtime",
+ "tokio",
 ]
 
 [[package]]

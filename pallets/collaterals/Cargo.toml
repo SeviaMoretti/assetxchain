@@ -20,6 +20,13 @@ scale-info = { features = ["derive"], workspace = true }
 sp-runtime.workspace = true
 sp-std.workspace = true
 
+[dev-dependencies]
+pallet-balances = { features = ["std"], workspace = true }
+sp-core = { default-features = true, workspace = true }
+sp-io = { default-features = true, workspace = true }
+sp-runtime = { default-features = true, workspace = true }
+tokio.workspace = true
+
 [features]
 default = ["std"]
 std = [

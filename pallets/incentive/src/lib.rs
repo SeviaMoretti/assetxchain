@@ -20,6 +20,12 @@ use alloc::vec::Vec;
 #[cfg(feature = "runtime-benchmarks")]
 mod benchmarking;
 
+#[cfg(test)]
+mod mock;
+
+#[cfg(test)]
+mod tests;
+
 pub mod weights;
 
 pub use pallet::*;
@@ -467,9 +473,11 @@ impl<T: Config> Pallet<T> {
         let available = Self::get_available_balance();
         ensure!(available >= amount, Error::<T>::InsufficientIncentivePoolBalance);
         
-        // 检查实际余额
+        // 检查实际可转余额，保留 existential deposit 维持池账户存活。
         let actual_balance = <T as Config>::Currency::free_balance(&pool_account);
-        ensure!(actual_balance >= amount, Error::<T>::InsufficientIncentivePoolBalance);
+        let transferable_balance =
+            actual_balance.saturating_sub(<T as Config>::Currency::minimum_balance());
+        ensure!(transferable_balance >= amount, Error::<T>::InsufficientIncentivePoolBalance);
 
         // 执行转账
         <T as Config>::Currency::transfer(

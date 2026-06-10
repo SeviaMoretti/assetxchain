@@ -87,6 +87,10 @@ Status values:
 
 ## Current Work Status
 
+- 2026-06-10: `Completed` - Phase 3 incentives, rewards, and collateral audit.
+  Added focused tests for incentive pool accounting, first-create rewards, block
+  reward thresholds, collateral pledge/unbond, slash distribution, and runtime
+  incentive pool account consistency.
 - 2026-06-09: `Completed` - Phase 2 final `pallet-markets` verification unblock.
   `cargo test -p pallet-markets` passed after adding the explicit test-time
   `tokio` dependency.
@@ -177,7 +181,7 @@ Completion standard:
 
 ### Phase 3: Audit Incentives, Rewards, And Collateral
 
-Status: `Pending`
+Status: `Completed` (updated 2026-06-10)
 
 Goal: make the economic accounting internally consistent.
 
@@ -200,6 +204,15 @@ Tasks:
 - Add tests for collateral pledge, unbond, and slash distribution.
 - Clarify the boundary between data asset registration collateral and
   role-based collateral.
+
+Boundary clarification:
+
+- Data asset registration collateral remains owned by `pallet-dataassets`; it is
+  tied to asset availability and registration lifecycle.
+- Role-based collateral remains owned by `pallet-collaterals`; it is tied to
+  market operators, IPFS providers, and governance participants.
+- Market reward operator lookup is deferred until the market registry exposes a
+  stable operator lookup interface to `pallet-incentive`.
 
 Verification:
 

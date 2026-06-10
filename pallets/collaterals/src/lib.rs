@@ -5,6 +5,12 @@ pub use pallet::*;
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
 
+#[cfg(test)]
+mod mock;
+
+#[cfg(test)]
+mod tests;
+
 // 权重定义
 pub mod weights;
 
@@ -13,16 +19,15 @@ pub mod pallet {
     use super::*;
     use frame_support::{
         pallet_prelude::*,
-        traits::{Currency, ReservableCurrency, Get, ExistenceRequirement, Imbalance, BalanceStatus},
+        traits::{Currency, Imbalance, ReservableCurrency, Get},
         transactional,
     };
     use frame_system::pallet_prelude::*;
     use sp_runtime::{
-        traits::{Zero, CheckedAdd, CheckedSub, SaturatedConversion, Bounded, AccountIdConversion, Saturating},
+        traits::{Zero, CheckedAdd, SaturatedConversion, Bounded, Saturating},
         DispatchError, ArithmeticError,
     };
     use scale_info::TypeInfo;
-    use core::convert::TryInto;
     use codec::{Encode, Decode, MaxEncodedLen, DecodeWithMemTracking};
 
     pub trait WeightInfo {
@@ -282,11 +287,11 @@ pub mod pallet {
             }
 
             // 2. 根据惩罚类型确定分配比例
-            let (burn_ratio, incentive_ratio, compensation_ratio, ipfs_ratio) = match slash_type {
-                SlashType::HeavyViolation => (50, 50, 0, 0),
-                SlashType::LightViolation => (30, 70, 0, 0),
-                SlashType::MarketOperatorHeavy => (50, 0, 50, 0),
-                SlashType::IpfsProviderHeavy => (50, 0, 0, 50),
+            let (burn_ratio, compensation_ratio, ipfs_ratio) = match slash_type {
+                SlashType::HeavyViolation => (50, 0, 0),
+                SlashType::LightViolation => (30, 0, 0),
+                SlashType::MarketOperatorHeavy => (50, 50, 0),
+                SlashType::IpfsProviderHeavy => (50, 0, 50),
             };
 
             // 3. 计算各部分金额
@@ -301,23 +306,32 @@ pub mod pallet {
                 .saturating_sub(compensation_amount)
                 .saturating_sub(ipfs_amount);
 
-            // 4. 执行资金划拨 (Repatriate)
-            // 直接从 who 的 reserved 转移到各个池子账户的 free 余额中
+            // 4. 从 reserved 罚没后再分配，允许池账户尚未存在。
+            let (slashed_imbalance, unslashed) = T::Currency::slash_reserved(who, actual_slash);
+            ensure!(unslashed.is_zero(), ArithmeticError::Underflow);
+            let (burn_imbalance, remaining_imbalance) = slashed_imbalance.split(burn_amount);
+            let (compensation_imbalance, remaining_imbalance) =
+                remaining_imbalance.split(compensation_amount);
+            let (ipfs_imbalance, incentive_imbalance) =
+                remaining_imbalance.split(ipfs_amount);
             
             if !burn_amount.is_zero() {
-                T::Currency::repatriate_reserved(who, &T::DestructionAccount::get(), burn_amount, BalanceStatus::Free)?;
+                T::Currency::resolve_creating(&T::DestructionAccount::get(), burn_imbalance);
             }
             
             if !compensation_amount.is_zero() {
-                T::Currency::repatriate_reserved(who, &T::CompensationPoolAccount::get(), compensation_amount, BalanceStatus::Free)?;
+                T::Currency::resolve_creating(
+                    &T::CompensationPoolAccount::get(),
+                    compensation_imbalance,
+                );
             }
             
             if !ipfs_amount.is_zero() {
-                T::Currency::repatriate_reserved(who, &T::IpfsPoolAccount::get(), ipfs_amount, BalanceStatus::Free)?;
+                T::Currency::resolve_creating(&T::IpfsPoolAccount::get(), ipfs_imbalance);
             }
             
             if !final_incentive_amount.is_zero() {
-                T::Currency::repatriate_reserved(who, &T::IncentivePoolAccount::get(), final_incentive_amount, BalanceStatus::Free)?;
+                T::Currency::resolve_creating(&T::IncentivePoolAccount::get(), incentive_imbalance);
             }
 
             // 5. 更新存储

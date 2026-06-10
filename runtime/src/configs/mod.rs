@@ -560,7 +560,9 @@ parameter_types! {
     
     // 资金池账户
     pub const DestructionAccount: AccountId = AccountId::new([0u8; 32]); 
-    pub const IncentivePoolAccount: AccountId = AccountId::new([1u8; 32]); // pallets/incentive/src/lib.rs 中有账户定义
+    pub const IncentivePoolAccount: AccountId = AccountId::new(hex_literal::hex!(
+        "1a9de66d5ca5a6a7bad9add630d85b972f351082b0422e5f64c78a4eecc4a427"
+    ));
     pub const IpfsPoolAccount: AccountId = AccountId::new([2u8; 32]);
     pub const CompensationPoolAccount: AccountId = AccountId::new([3u8; 32]);
 }
@@ -585,5 +587,21 @@ impl pallet_collaterals::Config for Runtime {
 impl crate::custom_header::AssetsStateRootProvider<sp_runtime::traits::BlakeTwo256> for Runtime {
     fn compute_assets_state_root() -> sp_core::H256 {
         pallet_dataassets::Pallet::<Runtime>::compute_asset_root()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hex_literal::hex;
+
+    #[test]
+    fn collateral_incentive_pool_account_matches_genesis_funding_account() {
+        assert_eq!(
+            IncentivePoolAccount::get(),
+            AccountId::new(hex!(
+                "1a9de66d5ca5a6a7bad9add630d85b972f351082b0422e5f64c78a4eecc4a427"
+            )),
+        );
     }
 }

@@ -23,7 +23,8 @@ scale-info = { features = ["derive"], workspace = true }
 sp-core = { default-features = true, workspace = true }
 sp-io = { default-features = true, workspace = true }
 sp-runtime = { default-features = true, workspace = true }
-pallet-balances = { workspace = true }
+pallet-balances = { features = ["std"], workspace = true }
+tokio.workspace = true
 
 [features]
 default = ["std"]

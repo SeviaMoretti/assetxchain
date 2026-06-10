@@ -28,10 +28,12 @@ log.workspace = true
 pallet-dataassets.workspace = true
 
 [dev-dependencies]
+pallet-balances = { features = ["std"], workspace = true }
 sp-core = { default-features = true, workspace = true }
 sp-io = { default-features = true, workspace = true }
 sp-runtime = { default-features = true, workspace = true }
 pallet-timestamp = { default-features = true, workspace = true }
+tokio.workspace = true
 
 [features]
 default = ["std"]

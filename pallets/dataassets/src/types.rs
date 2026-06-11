@@ -1,5 +1,5 @@
 extern crate alloc;
-use codec::{Encode, Decode, MaxEncodedLen};
+use codec::{Encode, Decode, DecodeWithMemTracking, MaxEncodedLen};
 use sp_std::vec::Vec;
 use sp_core::H256;
 use scale_info::TypeInfo;
@@ -45,6 +45,8 @@ pub struct AssetMetadata {
 	pub labels: BoundedVec<BoundedVec<u8, ConstU32<MAX_LABEL_LEN>>,
 		ConstU32<MAX_LABELS_COUNT>>,
 	pub metadata_cid: BoundedVec<u8, ConstU32<MAX_CID_LEN>>,
+	pub data_cid: BoundedVec<u8, ConstU32<MAX_CID_LEN>>,
+	pub data_size_bytes: u64,
 }
 
 /// Data quality characteristics
@@ -135,7 +137,7 @@ pub enum CollateralStatus<Balance> {
 }
 
 /// Encryption Information
-#[derive(Encode, Decode, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen)]
+#[derive(Encode, Decode, DecodeWithMemTracking, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen)]
 pub struct EncryptionInfo {
 	pub algorithm: BoundedVec<u8, ConstU32<MAX_ALGORITHM_LEN>>,
 	pub key_length: u32,
@@ -213,6 +215,8 @@ impl Default for AssetMetadata {
 			quantity: 0,
 			labels: BoundedVec::default(),
 			metadata_cid: BoundedVec::default(),
+			data_cid: BoundedVec::default(),
+			data_size_bytes: 0,
 		}
 	}
 }
@@ -385,6 +389,8 @@ impl<AccountId: Clone + Encode> DataAsset<AccountId> {
 				quantity: 0,
 				labels: BoundedVec::default(),
 				metadata_cid: BoundedVec::default(),
+				data_cid: BoundedVec::default(),
+				data_size_bytes: 0,
 			},
 			characteristics: AssetCharacteristics::default(),
 			statistics: AssetStatistics::default(),

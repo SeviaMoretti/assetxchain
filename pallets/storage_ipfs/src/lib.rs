@@ -2,7 +2,6 @@
 
 ///数据物理层存储
 ///数据存储、验证、激励、惩罚
-
 pub use pallet::*;
 pub mod types;
 
@@ -11,20 +10,21 @@ pub mod pallet {
     use super::*;
     use frame_support::pallet_prelude::*;
     use frame_system::pallet_prelude::*;
-    use sp_std::vec::Vec;
     use sp_core::H256;
-    
-    // 引入依赖模块的类型
-    use pallet_collaterals::{CollateralRole, Pallet as CollateralPallet};
-    use pallet_shared_traits::{DataAssetInternal, EncryptionInfo};
+    use sp_std::vec::Vec;
+
+    use crate::types::StorageOrder;
+    use pallet_shared_traits::DataAssetInternal;
 
     #[pallet::pallet]
     pub struct Pallet<T>(_);
 
     #[pallet::config]
-    pub trait Config: frame_system::Config + pallet_collaterals::Config + pallet_dataassets::Config {
+    pub trait Config:
+        frame_system::Config + pallet_collaterals::Config + pallet_dataassets::Config
+    {
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
-        
+
         /// 资产处理接口，用于调用 pallet-dataassets
         type AssetHandler: DataAssetInternal<Self::AccountId, BalanceOf<Self>>;
 
@@ -33,14 +33,17 @@ pub mod pallet {
         type ProofPeriod: Get<BlockNumberFor<Self>>;
     }
 
-    type BalanceOf<T> = <<T as pallet_collaterals::Config>::Currency as frame_support::traits::Currency<<T as frame_system::Config>::AccountId>>::Balance;
+    type BalanceOf<T> =
+        <<T as pallet_collaterals::Config>::Currency as frame_support::traits::Currency<
+            <T as frame_system::Config>::AccountId,
+        >>::Balance;
 
     /// 存储提供者信息
     #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
     pub struct ProviderInfo<BlockNumber, Balance> {
         pub endpoint: BoundedVec<u8, ConstU32<128>>, // IPFS Multiaddr
-        pub capacity: u32, // 存储容量（单位：GB）
-        pub pledged_amount: Balance, // 质押金额
+        pub capacity: u32,                           // 存储容量（单位：GB）
+        pub pledged_amount: Balance,                 // 质押金额
         pub registered_at: BlockNumber,
         pub is_active: bool,
     }
@@ -48,10 +51,10 @@ pub mod pallet {
     /// 资产的存储绑定信息
     #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
     pub struct AssetStorageInfo<AccountId, Balance> {
-        pub provider_id: AccountId,                  // 绑定的服务商
+        pub provider_id: AccountId,     // 绑定的服务商
         pub storage_fund: Balance, // 应该是从账户中扣除的、 IPFS存储费用池（从注册质押金中划扣）
-        pub storage_account: AccountId,                 // 存储专用账户（用于支付存储费用）
-        pub is_weak: bool,                           // 是否处于余额不足的虚弱状态
+        pub storage_account: AccountId, // 存储专用账户（用于支付存储费用）
+        pub is_weak: bool,         // 是否处于余额不足的虚弱状态
     }
 
     /// 存储证明记录
@@ -65,11 +68,11 @@ pub mod pallet {
     #[pallet::storage]
     #[pallet::getter(fn storage_orders)]
     pub type StorageOrders<T: Config> = StorageMap<
-        _, 
-        Blake2_128Concat, 
+        _,
+        Blake2_128Concat,
         [u8; 32], // asset_id
         StorageOrder<BalanceOf<T>, BlockNumberFor<T>>,
-        OptionQuery
+        OptionQuery,
     >;
 
     #[pallet::storage]
@@ -86,8 +89,10 @@ pub mod pallet {
     #[pallet::getter(fn storage_proofs)]
     pub type StorageProofs<T: Config> = StorageDoubleMap<
         _,
-        Blake2_128Concat, [u8; 32], // asset_id
-        Blake2_128Concat, T::AccountId, // provider
+        Blake2_128Concat,
+        [u8; 32], // asset_id
+        Blake2_128Concat,
+        T::AccountId, // provider
         StorageProof<BlockNumberFor<T>>,
         OptionQuery,
     >;
@@ -106,8 +111,14 @@ pub mod pallet {
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
-        ProviderRegistered { who: T::AccountId, endpoint: Vec<u8> },
-        ProofSubmitted { asset_id: [u8; 32], provider: T::AccountId },
+        ProviderRegistered {
+            who: T::AccountId,
+            endpoint: Vec<u8>,
+        },
+        ProofSubmitted {
+            asset_id: [u8; 32],
+            provider: T::AccountId,
+        },
     }
 
     #[pallet::error]
@@ -119,8 +130,5 @@ pub mod pallet {
     }
 
     #[pallet::call]
-    impl<T: Config> Pallet<T> {
-        
-    }
-
+    impl<T: Config> Pallet<T> {}
 }

@@ -13,6 +13,7 @@ members = [
     "pallets/rewards",
     "pallets/incentive",
     "pallets/shared_traits",
+    "pallets/storage_ipfs",
     "runtime", 
     "pallets/markets", "pallets/collaterals", "contracts/market_standard", "contracts/market_orderbook", "pallets/validator",
 ]
@@ -33,6 +34,7 @@ pallet-rewards = { path = "./pallets/rewards", default-features = false }
 pallet-incentive = { path = "./pallets/incentive", default-features = false }
 pallet-markets = { path = "./pallets/markets", default-features = false }
 pallet-shared-traits = { path = "./pallets/shared_traits", default-features = false }
+pallet-storage-ipfs = { path = "./pallets/storage_ipfs", default-features = false, package = "storage_ipfs" }
 pallet-validator = { path = "./pallets/validator",default-features = false }
 frame-benchmarking = { git = "https://github.com/paritytech/polkadot-sdk.git", tag = "polkadot-v1.19.0", default-features = false }
 frame-executive = { git = "https://github.com/paritytech/polkadot-sdk.git", tag = "polkadot-v1.19.0", default-features = false }

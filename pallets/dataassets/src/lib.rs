@@ -328,52 +328,44 @@ pub mod pallet {
             name: Vec<u8>,
             description: Vec<u8>,
             raw_data_hash: H256,
-            data_size_bytes: u64, // 应该该有cid、encryptioninfo等信息
+            data_size_bytes: u64,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
-
-            let (asset_id, timestamp) =
-                Self::prepare_asset_registration(&who, &name, &description, &raw_data_hash)?;
-            // Get collateral amount for event
-            let (collateral_amount, is_over_capped) = Self::calculate_collateral(data_size_bytes);
-            if is_over_capped {
-                // 获取上限值，用于事件中展示“原计算值vs上限值”
-                let max_collateral = T::MaxCollateral::get();
-                // 重新计算“未封顶的原始金额”（用于提示用户“原本需要多少，实际锁定多少”）
-                let data_size_mb = ((data_size_bytes as u128) / (1024 * 1024)).max(1);
-                let variable_collateral =
-                    T::CollateralPerMB::get().saturating_mul(data_size_mb.saturated_into());
-                let total_uncapped = T::BaseCollateral::get().saturating_add(variable_collateral);
-
-                // 发射超限提示事件
-                Self::deposit_event(Event::CollateralOverCappedHint {
-                    asset_id,
-                    depositor: who.clone(),
-                    total_uncapped, // 未封顶的原始计算值（如102000DAT）
-                    capped_amount: collateral_amount, // 封顶后的实际锁定值（如50000DAT）
-                    max_collateral, // 质押金上限（如50000DAT）
-                });
-            }
-            // Lock collateral BEFORE creating asset
-            Self::lock_collateral(&asset_id, &who, collateral_amount)?;
-            let token_id =
-                Self::store_registered_asset(&who, name, description, raw_data_hash, timestamp, asset_id)?;
-            // 一个元证一棵子树真实情况下可能有性能问题
-            // 之后改成一棵子树存元证一棵子树存权证
-            // Self::initialize_certificate_trie(&asset_id);
-
-            // 首次创建奖励发放(捕捉错误，不阻断业务)
-            if let Err(_) = T::IncentiveHandler::distribute_first_create_reward(&who, &asset_id) {
-                log::error!("首次创建奖励发放失败：asset_id={:?}", asset_id);
+            Self::do_register_asset(
+                who,
+                name,
+                description,
+                raw_data_hash,
+                data_size_bytes,
+                Vec::new(),
+                Vec::new(),
+                EncryptionInfo::default(),
+            )
             }
 
-            Self::deposit_event(Event::AssetRegistered {
-                asset_id,
-                token_id,
-                owner: who,
-                collateral: collateral_amount,
-            });
-            Ok(())
+        #[pallet::call_index(12)]
+        #[pallet::weight(<T as Config>::WeightInfo::register_asset())]
+        pub fn register_asset_with_metadata(
+            origin: OriginFor<T>,
+            name: Vec<u8>,
+            description: Vec<u8>,
+            raw_data_hash: H256,
+            data_size_bytes: u64,
+            metadata_cid: Vec<u8>,
+            data_cid: Vec<u8>,
+            encryption_info: EncryptionInfo,
+        ) -> DispatchResult {
+            let who = ensure_signed(origin)?;
+            Self::do_register_asset(
+                who,
+                name,
+                description,
+                raw_data_hash,
+                data_size_bytes,
+                metadata_cid,
+                data_cid,
+                encryption_info,
+            )
         }
 
         /// Experiment-only asset registration path without collateral locking or incentive payout.
@@ -384,13 +376,23 @@ pub mod pallet {
             name: Vec<u8>,
             description: Vec<u8>,
             raw_data_hash: H256,
-            _data_size_bytes: u64,
+            data_size_bytes: u64,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
             let (asset_id, timestamp) =
                 Self::prepare_asset_registration(&who, &name, &description, &raw_data_hash)?;
-            let token_id =
-                Self::store_registered_asset(&who, name, description, raw_data_hash, timestamp, asset_id)?;
+            let token_id = Self::store_registered_asset(
+                &who,
+                name,
+                description,
+                raw_data_hash,
+                timestamp,
+                asset_id,
+                data_size_bytes,
+                Vec::new(),
+                Vec::new(),
+                EncryptionInfo::default(),
+            )?;
 
             Self::deposit_event(Event::AssetRegistered {
                 asset_id,
@@ -432,7 +434,7 @@ pub mod pallet {
             let token_id = Self::get_next_certificate_id(&asset_id);
             let current_time = Self::current_timestamp();
 
-            // 使用 minimal 构造函数，没有修改issuer，市场只是代理
+            // 使用 minimal 构造函数，没有修改issuer，市场只是代理（issuer是否应该为市场，owner为授权者）
             let certificate = RightToken::minimal(
                 token_id,
                 right_type_enum,
@@ -764,6 +766,63 @@ pub mod pallet {
             Ok((asset_id, timestamp))
         }
 
+        fn do_register_asset(
+            who: T::AccountId,
+            name: Vec<u8>,
+            description: Vec<u8>,
+            raw_data_hash: H256,
+            data_size_bytes: u64,
+            metadata_cid: Vec<u8>,
+            data_cid: Vec<u8>,
+            encryption_info: EncryptionInfo,
+        ) -> DispatchResult {
+            let (asset_id, timestamp) =
+                Self::prepare_asset_registration(&who, &name, &description, &raw_data_hash)?;
+            let (collateral_amount, is_over_capped) = Self::calculate_collateral(data_size_bytes);
+
+            if is_over_capped {
+                let max_collateral = T::MaxCollateral::get();
+                let data_size_mb = ((data_size_bytes as u128) / (1024 * 1024)).max(1);
+                let variable_collateral =
+                    T::CollateralPerMB::get().saturating_mul(data_size_mb.saturated_into());
+                let total_uncapped = T::BaseCollateral::get().saturating_add(variable_collateral);
+
+                Self::deposit_event(Event::CollateralOverCappedHint {
+                    asset_id,
+                    depositor: who.clone(),
+                    total_uncapped,
+                    capped_amount: collateral_amount,
+                    max_collateral,
+                });
+            }
+
+            Self::lock_collateral(&asset_id, &who, collateral_amount)?;
+            let token_id = Self::store_registered_asset(
+                &who,
+                name,
+                description,
+                raw_data_hash,
+                timestamp,
+                asset_id,
+                data_size_bytes,
+                metadata_cid,
+                data_cid,
+                encryption_info,
+            )?;
+
+            if let Err(_) = T::IncentiveHandler::distribute_first_create_reward(&who, &asset_id) {
+                log::error!("首次创建奖励发放失败：asset_id={:?}", asset_id);
+            }
+
+            Self::deposit_event(Event::AssetRegistered {
+                asset_id,
+                token_id,
+                owner: who,
+                collateral: collateral_amount,
+            });
+            Ok(())
+        }
+
         fn store_registered_asset(
             who: &T::AccountId,
             name: Vec<u8>,
@@ -771,6 +830,10 @@ pub mod pallet {
             raw_data_hash: H256,
             timestamp: u64,
             asset_id: [u8; 32],
+            data_size_bytes: u64,
+            metadata_cid: Vec<u8>,
+            data_cid: Vec<u8>,
+            encryption_info: EncryptionInfo,
         ) -> Result<u32, DispatchError> {
             let token_id = Self::get_and_increment_token_id();
 
@@ -778,6 +841,12 @@ pub mod pallet {
                 DataAsset::minimal(who.clone(), name, description, raw_data_hash, timestamp);
             asset.core.asset_id = asset_id;
             asset.core.token_id = token_id;
+            asset.metadata.metadata_cid =
+                BoundedVec::try_from(metadata_cid).map_err(|_| Error::<T>::InvalidInput)?;
+            asset.metadata.data_cid =
+                BoundedVec::try_from(data_cid).map_err(|_| Error::<T>::InvalidInput)?;
+            asset.metadata.data_size_bytes = data_size_bytes;
+            asset.encryption_info = encryption_info;
 
             Self::insert_asset(&asset_id, &asset)?;
             Self::set_token_mapping(token_id, asset_id);

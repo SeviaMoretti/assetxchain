@@ -2,7 +2,7 @@ use frame_support::{
     assert_noop, assert_ok, construct_runtime, derive_impl, parameter_types,
     traits::{ConstU128, ConstU32},
 };
-use pallet_dataassets::types::{AssetStatus, CollateralStatus, DataAsset};
+use pallet_dataassets::types::{AssetStatus, CollateralStatus, DataAsset, EncryptionInfo};
 use sp_core::H256;
 use sp_runtime::BuildStorage;
 use std::cell::RefCell;
@@ -188,6 +188,45 @@ fn register_asset_stores_asset_locks_collateral_and_emits_events() {
                 collateral: expected_collateral,
             },
         ));
+    });
+}
+
+#[test]
+fn register_asset_with_metadata_stores_offchain_location_metadata() {
+    new_test_ext().execute_with(|| {
+        let owner: AccountId = 1;
+        let raw_data_hash = H256::repeat_byte(0x99);
+        let metadata_cid = b"bafybeimetadata".to_vec();
+        let data_cid = b"bafybeidata".to_vec();
+        let data_size_bytes = 7 * 1024 * 1024;
+        let encryption_info = EncryptionInfo {
+            algorithm: b"AES-256-GCM".to_vec().try_into().unwrap(),
+            key_length: 256,
+            parameters_hash: H256::repeat_byte(0x55),
+            is_encrypted: true,
+        };
+
+        assert_ok!(DataAssets::register_asset_with_metadata(
+            RuntimeOrigin::signed(owner),
+            b"asset".to_vec(),
+            b"description".to_vec(),
+            raw_data_hash,
+            data_size_bytes,
+            metadata_cid.clone(),
+            data_cid.clone(),
+            encryption_info.clone(),
+        ));
+
+        let asset_id = DataAsset::generate_asset_id(&owner, Timestamp::get(), &raw_data_hash);
+        let asset = DataAssets::get_asset(&asset_id).expect("registered asset should be stored");
+
+        assert_eq!(asset.metadata.metadata_cid.to_vec(), metadata_cid);
+        assert_eq!(asset.metadata.data_cid.to_vec(), data_cid);
+        assert_eq!(asset.metadata.data_size_bytes, data_size_bytes);
+        assert_eq!(asset.encryption_info, encryption_info);
+
+        assert_eq!(asset.core.owner, owner);
+        assert_eq!(asset.core.status, AssetStatus::Private);
     });
 }
 

@@ -326,7 +326,9 @@ The IPFS storage pallet contains draft structures for:
 - Storage proofs.
 
 It is not listed as a runtime pallet in the current runtime composition and has
-no dispatchable calls implemented yet.
+no dispatchable calls implemented yet. It is listed as a Cargo workspace member
+so the prototype can be checked with `cargo check -p storage_ipfs` while runtime
+integration remains deferred.
 
 The design notes in `sto_ipfs.note` suggest a future direction where IPFS or a
 storage chain handles physical data availability, while AssetXChain records

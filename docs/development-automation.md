@@ -87,6 +87,10 @@ Status values:
 
 ## Current Work Status
 
+- 2026-06-11: `Completed` - Phase 4 IPFS and storage scope decision. Kept
+  physical data off-chain, added asset metadata fields for off-chain location
+  references, and made `storage_ipfs` a workspace-checkable prototype without
+  wiring it into the runtime.
 - 2026-06-10: `Completed` - Phase 3 incentives, rewards, and collateral audit.
   Added focused tests for incentive pool accounting, first-create rewards, block
   reward thresholds, collateral pledge/unbond, slash distribution, and runtime
@@ -230,43 +234,44 @@ Completion standard:
 
 ### Phase 4: Decide IPFS And Storage Integration Scope
 
-Status: `Pending`
+Status: `Completed` (updated 2026-06-11)
 
 Goal: keep storage integration from blocking the market MVP.
 
 Primary files:
 
+- `Cargo.toml`
 - `pallets/storage_ipfs/src/lib.rs`
 - `pallets/storage_ipfs/src/types.rs`
+- `pallets/dataassets/src/lib.rs`
 - `pallets/dataassets/src/types.rs`
+- `pallets/dataassets/tests/register_asset.rs`
 - `sto_ipfs.note`
 
 Preferred short-term direction:
 
 - Keep physical data off-chain.
-- Store `metadata_cid`, `data_cid`, file size, and encryption metadata as asset
+- Store `metadata_cid`, `data_cid`, data size, and encryption metadata as asset
   metadata.
 - Do not implement real IPFS availability checks until the core asset and market
   flow is stable.
+- Keep `storage_ipfs` as a workspace prototype for compile-time hygiene, but do
+  not add it to the runtime pallet composition yet.
 
-Tasks:
+Completed tasks:
 
-- Decide whether `storage_ipfs` should be runtime-wired now or remain a
-  prototype.
-- If runtime-wired, implement only provider registration, storage order
-  creation, and asset-to-CID binding first.
-- Avoid adding XCM or cross-chain storage logic in the first storage increment.
+- `storage_ipfs` remains a prototype and is not runtime-wired.
+- `pallet-dataassets` registration can store off-chain location metadata through
+  `register_asset_with_metadata`.
+- `storage_ipfs` is included in the workspace so it can be checked directly.
+- XCM, cross-chain storage orders, provider lifecycle logic, and real IPFS
+  availability checks remain deferred.
 
 Verification:
 
 ```sh
+cargo test -p pallet-dataassets
 cargo check -p storage_ipfs
-```
-
-If wired into runtime:
-
-```sh
-cargo check -p solochain-template-runtime
 ```
 
 Completion standard:
@@ -274,6 +279,7 @@ Completion standard:
 - Storage scope is documented.
 - Asset registration can reference off-chain data location metadata.
 - Storage work does not alter core ownership transfer semantics.
+- `storage_ipfs` compiles as a standalone workspace package.
 
 ### Phase 5: Improve Node, RPC, And Developer Experience
 

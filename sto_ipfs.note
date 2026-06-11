@@ -1,6 +1,14 @@
 pallet-storage_ipfs
 pallet-storage_ipfs::do_register_asset-->enc_data(链下)-->pallet-sto_ipfs::upload_enc_data(链下)-->调用pallet-dataassets::register_asset
 
+Phase 4 prototype:
+- provider 注册必须走 CollateralRole::IpfsProvider 质押。
+- storage_ipfs 暂不接 runtime，只作为 workspace prototype 编译和测试。
+- 当前只实现链内本地 provider/order/bind/proof 状态。
+- 真实 IPFS 可用性检查预留在 IpfsAvailabilityVerifier。
+- XCM / 存储链可用性检查预留在 XcmAvailabilityVerifier。
+- 实际 IPFS 检查、XCM 消息发送、存储链回调和 provider 退出生命周期后续实现。
+
 ##链下
 数据加密：使用对称密钥或非对称加密方案对原始数据进行加密。
 分片与哈希计算：将加密后的文件分片，计算Merkle Root（ raw_data_hash）。
@@ -32,4 +40,3 @@ CID映射管理：维护AssetID与IPFS CID的绑定关系，从主树读
 异步状态接收：接收来自存储平行链的XCM回调消息（存储成功、存储失效、订单过期）。
 
 存储证明这些不是由交易链负责，应该使用跨链消息传递与存储链对接（存储链作为之前的存储服务提供者）
-

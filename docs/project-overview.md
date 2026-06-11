@@ -318,17 +318,20 @@ asset state.
 
 ### `pallets/storage_ipfs`
 
-The IPFS storage pallet contains draft structures for:
+The IPFS storage pallet contains prototype structures and local dispatchable
+calls for:
 
-- Storage providers.
-- Storage orders.
+- Storage provider registration with `CollateralRole::IpfsProvider` pledge.
+- Storage order creation.
 - Asset-storage binding.
-- Storage proofs.
+- Storage proof submission by the bound provider.
 
-It is not listed as a runtime pallet in the current runtime composition and has
-no dispatchable calls implemented yet. It is listed as a Cargo workspace member
-so the prototype can be checked with `cargo check -p storage_ipfs` while runtime
-integration remains deferred.
+It is not listed as a runtime pallet in the current runtime composition. It is
+listed as a Cargo workspace member so the prototype can be checked with
+`cargo test -p storage_ipfs` and `cargo check -p storage_ipfs` while runtime
+integration remains deferred. The pallet exposes no-op `IpfsAvailabilityVerifier`
+and `XcmAvailabilityVerifier` extension points for future real IPFS checks and
+storage-chain / XCM availability checks.
 
 The design notes in `sto_ipfs.note` suggest a future direction where IPFS or a
 storage chain handles physical data availability, while AssetXChain records

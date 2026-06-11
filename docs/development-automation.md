@@ -87,10 +87,10 @@ Status values:
 
 ## Current Work Status
 
-- 2026-06-11: `Completed` - Phase 4 IPFS and storage scope decision. Kept
-  physical data off-chain, added asset metadata fields for off-chain location
-  references, and made `storage_ipfs` a workspace-checkable prototype without
-  wiring it into the runtime.
+- 2026-06-11: `Completed` - Phase 4 IPFS and storage prototype. Kept physical
+  data off-chain, added asset metadata fields for off-chain location
+  references, implemented the local `storage_ipfs` provider/order/bind/proof
+  prototype with provider collateral pledge, and left runtime wiring deferred.
 - 2026-06-10: `Completed` - Phase 3 incentives, rewards, and collateral audit.
   Added focused tests for incentive pool accounting, first-create rewards, block
   reward thresholds, collateral pledge/unbond, slash distribution, and runtime
@@ -232,7 +232,7 @@ Completion standard:
 - Block reward issuance respects threshold and max supply rules.
 - Slashing distribution has deterministic tests.
 
-### Phase 4: Decide IPFS And Storage Integration Scope
+### Phase 4: Implement Storage Prototype Scope
 
 Status: `Completed` (updated 2026-06-11)
 
@@ -257,6 +257,8 @@ Preferred short-term direction:
   flow is stable.
 - Keep `storage_ipfs` as a workspace prototype for compile-time hygiene, but do
   not add it to the runtime pallet composition yet.
+- Reserve explicit verifier extension points for future real IPFS availability
+  checks and XCM / storage-chain availability checks.
 
 Completed tasks:
 
@@ -264,13 +266,20 @@ Completed tasks:
 - `pallet-dataassets` registration can store off-chain location metadata through
   `register_asset_with_metadata`.
 - `storage_ipfs` is included in the workspace so it can be checked directly.
-- XCM, cross-chain storage orders, provider lifecycle logic, and real IPFS
-  availability checks remain deferred.
+- `storage_ipfs` supports local provider registration with required
+  `IpfsProvider` collateral pledge.
+- `storage_ipfs` supports local storage order creation, asset-to-provider
+  binding, and storage proof submission.
+- `IpfsAvailabilityVerifier` and `XcmAvailabilityVerifier` are no-op extension
+  points reserved for future real availability checks.
+- Runtime wiring, provider unbond/lifecycle management, real IPFS availability
+  checks, XCM message dispatch, and storage-chain callbacks remain deferred.
 
 Verification:
 
 ```sh
 cargo test -p pallet-dataassets
+cargo test -p storage_ipfs
 cargo check -p storage_ipfs
 ```
 
@@ -278,6 +287,10 @@ Completion standard:
 
 - Storage scope is documented.
 - Asset registration can reference off-chain data location metadata.
+- Storage providers must pledge `CollateralRole::IpfsProvider` collateral during
+  registration.
+- Asset owners can create local storage orders and bind registered providers.
+- Bound providers can submit storage proofs.
 - Storage work does not alter core ownership transfer semantics.
 - `storage_ipfs` compiles as a standalone workspace package.
 

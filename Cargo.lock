@@ -11693,6 +11693,7 @@ dependencies = [
  "frame-benchmarking",
  "frame-support",
  "frame-system",
+ "pallet-balances",
  "pallet-collaterals",
  "pallet-dataassets",
  "pallet-shared-traits",

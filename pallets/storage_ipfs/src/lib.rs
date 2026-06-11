@@ -5,32 +5,93 @@
 pub use pallet::*;
 pub mod types;
 
+use frame_support::{dispatch::DispatchResult, weights::Weight};
+use sp_core::H256;
+
+pub trait WeightInfo {
+    fn register_provider() -> Weight;
+    fn create_storage_order() -> Weight;
+    fn bind_asset_storage() -> Weight;
+    fn submit_storage_proof() -> Weight;
+}
+
+impl WeightInfo for () {
+    fn register_provider() -> Weight {
+        Weight::zero()
+    }
+
+    fn create_storage_order() -> Weight {
+        Weight::zero()
+    }
+
+    fn bind_asset_storage() -> Weight {
+        Weight::zero()
+    }
+
+    fn submit_storage_proof() -> Weight {
+        Weight::zero()
+    }
+}
+
+pub trait IpfsAvailabilityVerifier {
+    fn ensure_available(_cid: &[u8], _size: u64) -> DispatchResult {
+        Ok(())
+    }
+}
+
+impl IpfsAvailabilityVerifier for () {}
+
+pub trait XcmAvailabilityVerifier<AccountId> {
+    fn ensure_available(
+        _asset_id: &[u8; 32],
+        _provider: &AccountId,
+        _proof_hash: Option<&H256>,
+    ) -> DispatchResult {
+        Ok(())
+    }
+}
+
+impl<AccountId> XcmAvailabilityVerifier<AccountId> for () {}
+
+#[cfg(test)]
+mod mock;
+
+#[cfg(test)]
+mod tests;
+
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
     use frame_support::pallet_prelude::*;
     use frame_system::pallet_prelude::*;
-    use sp_core::H256;
+    use pallet_collaterals::{CollateralRole, Pallet as Collaterals};
+    use pallet_shared_traits::{AssetQueryError, DataAssetProvider};
     use sp_std::vec::Vec;
 
     use crate::types::StorageOrder;
-    use pallet_shared_traits::DataAssetInternal;
+    use sp_runtime::traits::Zero;
 
     #[pallet::pallet]
     pub struct Pallet<T>(_);
 
     #[pallet::config]
-    pub trait Config:
-        frame_system::Config + pallet_collaterals::Config + pallet_dataassets::Config
-    {
+    pub trait Config: frame_system::Config + pallet_collaterals::Config {
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
 
-        /// 资产处理接口，用于调用 pallet-dataassets
-        type AssetHandler: DataAssetInternal<Self::AccountId, BalanceOf<Self>>;
+        /// Asset ownership lookup, backed by pallet-dataassets in the runtime.
+        type DataAssetProvider: DataAssetProvider<Self::AccountId, [u8; 32]>;
+
+        /// Reserved extension point for real IPFS availability checks.
+        type IpfsAvailabilityVerifier: IpfsAvailabilityVerifier;
+
+        /// Reserved extension point for XCM / storage-chain availability checks.
+        type XcmAvailabilityVerifier: XcmAvailabilityVerifier<Self::AccountId>;
 
         /// 存储证明的有效周期（以区块数为单位）
         #[pallet::constant]
         type ProofPeriod: Get<BlockNumberFor<Self>>;
+
+        type WeightInfo: WeightInfo;
     }
 
     type BalanceOf<T> =
@@ -115,6 +176,14 @@ pub mod pallet {
             who: T::AccountId,
             endpoint: Vec<u8>,
         },
+        StorageOrderCreated {
+            asset_id: [u8; 32],
+            owner: T::AccountId,
+        },
+        AssetStorageBound {
+            asset_id: [u8; 32],
+            provider: T::AccountId,
+        },
         ProofSubmitted {
             asset_id: [u8; 32],
             provider: T::AccountId,
@@ -126,9 +195,178 @@ pub mod pallet {
         NotAProvider,
         ProviderAlreadyExists,
         InvalidEndpoint,
+        InvalidCapacity,
+        InvalidCid,
+        InvalidSize,
         AssetNotRegistered,
+        NotAssetOwner,
+        StorageOrderAlreadyExists,
+        StorageOrderNotFound,
+        StorageBindingAlreadyExists,
+        StorageBindingNotFound,
+        NotAssetStorageProvider,
     }
 
     #[pallet::call]
-    impl<T: Config> Pallet<T> {}
+    impl<T: Config> Pallet<T> {
+        #[pallet::call_index(0)]
+        #[pallet::weight(<T as Config>::WeightInfo::register_provider())]
+        pub fn register_provider(
+            origin: OriginFor<T>,
+            endpoint: Vec<u8>,
+            capacity: u32,
+            pledge_amount: BalanceOf<T>,
+        ) -> DispatchResult {
+            let who = ensure_signed(origin)?;
+            ensure!(
+                !Providers::<T>::contains_key(&who),
+                Error::<T>::ProviderAlreadyExists
+            );
+            ensure!(capacity > 0, Error::<T>::InvalidCapacity);
+            let bounded_endpoint =
+                BoundedVec::try_from(endpoint.clone()).map_err(|_| Error::<T>::InvalidEndpoint)?;
+            ensure!(!bounded_endpoint.is_empty(), Error::<T>::InvalidEndpoint);
+
+            Collaterals::<T>::internal_pledge(&who, CollateralRole::IpfsProvider, pledge_amount)?;
+
+            let provider = ProviderInfo {
+                endpoint: bounded_endpoint,
+                capacity,
+                pledged_amount: pledge_amount,
+                registered_at: frame_system::Pallet::<T>::block_number(),
+                is_active: true,
+            };
+            Providers::<T>::insert(&who, provider);
+
+            Self::deposit_event(Event::ProviderRegistered { who, endpoint });
+            Ok(())
+        }
+
+        #[pallet::call_index(1)]
+        #[pallet::weight(<T as Config>::WeightInfo::create_storage_order())]
+        pub fn create_storage_order(
+            origin: OriginFor<T>,
+            asset_id: [u8; 32],
+            cid: Vec<u8>,
+            size: u64,
+            paid_fee: BalanceOf<T>,
+            valid_until: BlockNumberFor<T>,
+        ) -> DispatchResult {
+            let who = ensure_signed(origin)?;
+            Self::ensure_asset_owner(&asset_id, &who)?;
+            ensure!(
+                !StorageOrders::<T>::contains_key(asset_id),
+                Error::<T>::StorageOrderAlreadyExists
+            );
+            ensure!(size > 0, Error::<T>::InvalidSize);
+
+            let bounded_cid =
+                BoundedVec::try_from(cid.clone()).map_err(|_| Error::<T>::InvalidCid)?;
+            ensure!(!bounded_cid.is_empty(), Error::<T>::InvalidCid);
+            T::IpfsAvailabilityVerifier::ensure_available(&bounded_cid, size)?;
+
+            let status = if paid_fee.is_zero() {
+                crate::types::StorageStatus::Unfunded
+            } else {
+                crate::types::StorageStatus::Active
+            };
+
+            let order = StorageOrder {
+                cid: bounded_cid,
+                size,
+                status,
+                paid_fee,
+                ordered_at: frame_system::Pallet::<T>::block_number(),
+                valid_until,
+            };
+            StorageOrders::<T>::insert(asset_id, order);
+
+            Self::deposit_event(Event::StorageOrderCreated {
+                asset_id,
+                owner: who,
+            });
+            Ok(())
+        }
+
+        #[pallet::call_index(2)]
+        #[pallet::weight(<T as Config>::WeightInfo::bind_asset_storage())]
+        pub fn bind_asset_storage(
+            origin: OriginFor<T>,
+            asset_id: [u8; 32],
+            provider: T::AccountId,
+        ) -> DispatchResult {
+            let who = ensure_signed(origin)?;
+            Self::ensure_asset_owner(&asset_id, &who)?;
+            let provider_info = Providers::<T>::get(&provider).ok_or(Error::<T>::NotAProvider)?;
+            ensure!(provider_info.is_active, Error::<T>::NotAProvider);
+            let order =
+                StorageOrders::<T>::get(asset_id).ok_or(Error::<T>::StorageOrderNotFound)?;
+            ensure!(
+                !AssetStorageBinds::<T>::contains_key(asset_id),
+                Error::<T>::StorageBindingAlreadyExists
+            );
+
+            T::XcmAvailabilityVerifier::ensure_available(&asset_id, &provider, None)?;
+
+            let binding = AssetStorageInfo {
+                provider_id: provider.clone(),
+                storage_fund: order.paid_fee,
+                storage_account: provider.clone(),
+                is_weak: false,
+            };
+            AssetStorageBinds::<T>::insert(asset_id, binding);
+
+            Self::deposit_event(Event::AssetStorageBound { asset_id, provider });
+            Ok(())
+        }
+
+        #[pallet::call_index(3)]
+        #[pallet::weight(<T as Config>::WeightInfo::submit_storage_proof())]
+        pub fn submit_storage_proof(
+            origin: OriginFor<T>,
+            asset_id: [u8; 32],
+            proof_hash: H256,
+        ) -> DispatchResult {
+            let provider = ensure_signed(origin)?;
+            ensure!(
+                Providers::<T>::contains_key(&provider),
+                Error::<T>::NotAProvider
+            );
+            let binding =
+                AssetStorageBinds::<T>::get(asset_id).ok_or(Error::<T>::StorageBindingNotFound)?;
+            ensure!(
+                binding.provider_id == provider,
+                Error::<T>::NotAssetStorageProvider
+            );
+
+            T::XcmAvailabilityVerifier::ensure_available(&asset_id, &provider, Some(&proof_hash))?;
+
+            let proof = StorageProof {
+                last_proof_block: frame_system::Pallet::<T>::block_number(),
+                proof_hash,
+            };
+            StorageProofs::<T>::insert(asset_id, &provider, proof);
+
+            Self::deposit_event(Event::ProofSubmitted { asset_id, provider });
+            Ok(())
+        }
+    }
+
+    impl<T: Config> Pallet<T> {
+        fn ensure_asset_owner(asset_id: &[u8; 32], who: &T::AccountId) -> DispatchResult {
+            let owner = T::DataAssetProvider::get_asset_owner(asset_id)
+                .map_err(Self::map_asset_query_error)?;
+            ensure!(owner == *who, Error::<T>::NotAssetOwner);
+            Ok(())
+        }
+
+        fn map_asset_query_error(error: AssetQueryError) -> Error<T> {
+            match error {
+                AssetQueryError::AssetNotFound => Error::<T>::AssetNotRegistered,
+                AssetQueryError::InvalidOwner | AssetQueryError::OwnerAccountDoesNotExist => {
+                    Error::<T>::NotAssetOwner
+                }
+            }
+        }
+    }
 }

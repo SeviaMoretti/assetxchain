@@ -91,6 +91,10 @@ Status values:
   data off-chain, added asset metadata fields for off-chain location
   references, implemented the local `storage_ipfs` provider/order/bind/proof
   prototype with provider collateral pledge, and left runtime wiring deferred.
+- 2026-06-11: `Completed` - Phase 5 node, RPC, and developer experience docs.
+  Documented the current node binary naming decision, custom proof RPC request
+  shape, runtime API query examples, `pallet-template` placeholder status, and
+  the manual MVP smoke-test flow.
 - 2026-06-10: `Completed` - Phase 3 incentives, rewards, and collateral audit.
   Added focused tests for incentive pool accounting, first-create rewards, block
   reward thresholds, collateral pledge/unbond, slash distribution, and runtime
@@ -296,26 +300,27 @@ Completion standard:
 
 ### Phase 5: Improve Node, RPC, And Developer Experience
 
-Status: `Pending`
+Status: `Completed` (updated 2026-06-11)
 
 Goal: make the project easy to run, inspect, and demo.
 
 Primary files:
 
-- `node/src/rpc.rs`
 - `node/src/data_asset_rpc.rs`
 - `runtime/src/runtime_api.rs`
 - `runtime/src/apis.rs`
 - `README.md`
 - `docs/project-overview.md`
+- `docs/mvp-smoke-test.md`
 
-Tasks:
+Completed tasks:
 
 - Document `dataAssets_getAssetProof` with a complete JSON-RPC example.
 - Add runtime API query examples.
-- Decide whether to rename the binary from `solochain-template-node` to
-  `assetxchain-node`.
-- Remove, isolate, or clearly label `pallet-template`.
+- Keep the binary name as `solochain-template-node` for this phase and document
+  that decision.
+- Clearly label `pallet-template` as a placeholder that is not part of the data
+  asset MVP.
 - Add a smoke-test document for the MVP flow.
 
 Verification:

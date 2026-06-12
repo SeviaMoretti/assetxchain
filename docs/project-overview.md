@@ -25,8 +25,9 @@ Contracts
   ink! market standard and order-book market prototype
 ```
 
-The current node binary is still named `solochain-template-node`, but the
-runtime logic has been customized around the data asset chain.
+The current node binary is still named `solochain-template-node`. Phase 5 keeps
+that name to avoid packaging churn while the runtime logic is customized around
+the data asset chain.
 
 ## Data Asset Model
 
@@ -254,6 +255,30 @@ This RPC builds a child-trie read proof for key:
 
 inside the `:asset_trie:` child trie.
 
+The current RPC signature uses `[u8; 32]`, so JSON-RPC callers should pass
+`asset_id` as an array of 32 byte values and `at` as `null` for the best block:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "dataAssets_getAssetProof",
+  "params": [
+    [7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7],
+    null
+  ]
+}
+```
+
+Runtime API queries can be made from Polkadot-JS:
+
+```js
+const assetId = new Uint8Array(32).fill(7);
+await api.call.dataAssetsApi.getAsset(assetId);
+await api.call.dataAssetsApi.getAssetByTokenId(0);
+await api.call.dataAssetsApi.getAssetRoot();
+```
+
 ## Genesis And Economic Accounts
 
 Genesis configuration is in `runtime/src/genesis_config_presets.rs`.
@@ -348,17 +373,22 @@ The current usable integration point is digest-based root emission from
 ### Template Pallet
 
 `pallets/template` remains in the runtime. It is still the original Substrate
-example pallet and is not part of the data asset business model.
+example pallet, is clearly labeled as a placeholder, and is not part of the data
+asset business model.
 
 ## Development Notes
 
 Common commands:
 
 ```sh
+cargo check -p solochain-template-node
 cargo build --release
 ./target/release/solochain-template-node --dev --tmp
 ./target/release/solochain-template-node purge-chain --dev
 ```
+
+For the end-to-end developer smoke path, see
+`docs/mvp-smoke-test.md`.
 
 Build benchmark-enabled node:
 

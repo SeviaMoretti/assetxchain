@@ -58,7 +58,7 @@ assetxchain/
     validator/          Validator set management for sessions
     shared_traits/      Cross-pallet traits
     storage_ipfs/       IPFS/storage-order prototype, not runtime-wired
-    template/           Original Substrate example pallet
+    template/           Original Substrate example pallet, placeholder only
   contracts/
     market_standard/    ink! market interface and chain extension bindings
     market_orderbook/   ink! order-book market prototype
@@ -86,6 +86,9 @@ The binary is currently still named after the original template:
 ```sh
 ./target/release/solochain-template-node --help
 ```
+
+Phase 5 keeps this binary name to avoid packaging and deployment churn. Treat
+`solochain-template-node` as the current development binary for AssetXChain.
 
 ## Run A Development Chain
 
@@ -193,6 +196,40 @@ dataAssets_getAssetProof(asset_id, at)
 ```
 
 This RPC generates a read proof for an asset stored in the asset child trie.
+Because the current RPC signature uses `[u8; 32]`, pass `asset_id` as a JSON
+array of 32 bytes. Use `null` for `at` to query the best block.
+
+```sh
+curl -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "dataAssets_getAssetProof",
+    "params": [
+      [7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7],
+      null
+    ]
+  }' \
+  http://localhost:9944
+```
+
+Runtime API query examples from Polkadot-JS:
+
+```js
+const assetId = new Uint8Array(32).fill(7);
+const certId = new Uint8Array(32).fill(9);
+
+const asset = await api.call.dataAssetsApi.getAsset(assetId);
+const byToken = await api.call.dataAssetsApi.getAssetByTokenId(0);
+const cert = await api.call.dataAssetsApi.getCertificate(assetId, certId);
+const root = await api.call.dataAssetsApi.getAssetRoot();
+```
+
+## MVP Smoke Test
+
+See [docs/mvp-smoke-test.md](./docs/mvp-smoke-test.md) for a concise manual
+flow covering node startup, asset registration with off-chain metadata,
+runtime API queries, and the custom proof RPC.
 
 ## Benchmarks
 

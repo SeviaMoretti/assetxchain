@@ -26,7 +26,7 @@ exclude = [
 resolver = "2"
 
 [workspace.dependencies]
-solochain-template-runtime = { path = "./runtime", default-features = false }
+assetxchain-runtime = { path = "./runtime", default-features = false }
 pallet-template = { path = "./pallets/template", default-features = false }
 pallet-collaterals = { path = "./pallets/collaterals", default-features = false }
 pallet-dataassets = { path = "./pallets/dataassets", default-features = false }

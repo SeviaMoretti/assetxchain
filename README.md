@@ -81,40 +81,39 @@ Build the node:
 cargo build --release
 ```
 
-The binary is currently still named after the original template:
+The node binary is named for AssetXChain:
 
 ```sh
-./target/release/solochain-template-node --help
+./target/release/assetxchain-node --help
 ```
 
-Phase 5 keeps this binary name to avoid packaging and deployment churn. Treat
-`solochain-template-node` as the current development binary for AssetXChain.
+Use `assetxchain-node` as the development and release binary for AssetXChain.
 
 ## Run A Development Chain
 
 Start a temporary single-node development chain:
 
 ```sh
-./target/release/solochain-template-node --dev --tmp
+./target/release/assetxchain-node --dev --tmp
 ```
 
 Start with persistent state:
 
 ```sh
 mkdir -p ./dev-chain-state
-./target/release/solochain-template-node --dev --base-path ./dev-chain-state
+./target/release/assetxchain-node --dev --base-path ./dev-chain-state
 ```
 
 Purge development state:
 
 ```sh
-./target/release/solochain-template-node purge-chain --dev
+./target/release/assetxchain-node purge-chain --dev
 ```
 
 Run with debug logs:
 
 ```sh
-RUST_BACKTRACE=1 ./target/release/solochain-template-node -ldebug --dev
+RUST_BACKTRACE=1 ./target/release/assetxchain-node -ldebug --dev
 ```
 
 After the node starts, connect Polkadot-JS Apps to:
@@ -128,7 +127,7 @@ ws://localhost:9944
 The node supports the standard `dev` and `local` chain spec presets:
 
 ```sh
-./target/release/solochain-template-node --chain local --alice --validator \
+./target/release/assetxchain-node --chain local --alice --validator \
   --base-path /tmp/assetx-alice \
   --port 30333 \
   --rpc-port 9944 \
@@ -242,7 +241,7 @@ cargo build --release --features runtime-benchmarks
 Example pallet benchmark command:
 
 ```sh
-./target/release/solochain-template-node benchmark pallet \
+./target/release/assetxchain-node benchmark pallet \
   --chain dev \
   --pallet pallet_dataassets \
   --extrinsic "*" \

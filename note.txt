@@ -9,7 +9,7 @@ git clone 项目到本地后，不要更改catgo.toml中crate的version，cargo 
 实现benchmarking.rs&mock.rs: cargo test -p pallet-rewards --features runtime-benchmarks
 
 基准测试：cargo build --release --features runtime-benchmarks
-成功之后（生成weights）./target/release/solochain-template-node benchmark pallet     
+成功之后（生成weights）./target/release/assetxchain-node benchmark pallet
                     --chain dev     
                     --pallet pallet_dataassets     
                     --extrinsic "*"     
@@ -17,7 +17,7 @@ git clone 项目到本地后，不要更改catgo.toml中crate的version，cargo 
                     --repeat 20     
                     --output pallets/dataassets/src/weights.rs
 
-./target/release/solochain-template-node benchmark pallet \
+./target/release/assetxchain-node benchmark pallet \
     --chain dev \
     --pallet pallet_markets\
     --extrinsic "*" \
@@ -41,15 +41,15 @@ T>（普通动态数组） + 长度上限约束（由 S 定义），是 Substrat
 #########
 ##启动开发链（最常用，自动生成临时数据，适合测试）
 单节点
-./target/release/solochain-template-node --dev
-./target/release/solochain-template-node --dev --tmp
+./target/release/assetxchain-node --dev
+./target/release/assetxchain-node --dev --tmp
 
 # 生成 Alice 的网络密钥
 mkdir -p /tmp/alice/chains/local_testnet/network
-./target/release/solochain-template-node key generate-node-key --file /tmp/alice/chains/local_testnet/network/secret_ed25519
+./target/release/assetxchain-node key generate-node-key --file /tmp/alice/chains/local_testnet/network/secret_ed25519
 alice节点ID(不固定)：12D3KooW9pU34RzoFpDr7ua6yPXhMCUvzPTSokVzD4eWdTSTgbyD
 # 启动alice节点
-./target/release/solochain-template-node \
+./target/release/assetxchain-node \
   --chain local \
   --alice \
   --validator \
@@ -60,9 +60,9 @@ alice节点ID(不固定)：12D3KooW9pU34RzoFpDr7ua6yPXhMCUvzPTSokVzD4eWdTSTgbyD
   --rpc-cors all
 # 生成 bob 的网络密钥
 mkdir -p /tmp/bob/chains/local_testnet/network
-./target/release/solochain-template-node key generate-node-key --file /tmp/bob/chains/local_testnet/network/secret_ed25519
+./target/release/assetxchain-node key generate-node-key --file /tmp/bob/chains/local_testnet/network/secret_ed25519
 bob节点ID：12D3KooWNCVxkhkWA3p4CRMVbZgyzLaoeAogYQdajidzSR1c28P7
-./target/release/solochain-template-node \
+./target/release/assetxchain-node \
   --chain local \
   --bob \
   --validator \
@@ -73,9 +73,9 @@ bob节点ID：12D3KooWNCVxkhkWA3p4CRMVbZgyzLaoeAogYQdajidzSR1c28P7
 
 # 新建moretti角色
 mkdir -p /tmp/moretti/chains/local_testnet/network
-./target/release/solochain-template-node key generate-node-key --file /tmp/moretti/chains/local_testnet/network/secret_ed25519
+./target/release/assetxchain-node key generate-node-key --file /tmp/moretti/chains/local_testnet/network/secret_ed25519
 12D3KooWCZEhURtNTvJfAiq1Em7d1wCprYriyq6fwtktzEJkJrJi
-./target/release/solochain-template-node \
+./target/release/assetxchain-node \
   --chain local \
   --validator \
   --base-path /tmp/moretti \
@@ -92,7 +92,7 @@ mkdir -p /tmp/moretti/chains/local_testnet/network
 
 
 ## To start the development chain with detailed logging, run the following command:
-RUST_BACKTRACE=1 ./target/release/solochain-template-node -ldebug --dev
+RUST_BACKTRACE=1 ./target/release/assetxchain-node -ldebug --dev
 
 ## Substrate 节点默认开启 RPC 服务（端口 9933，具体看终端输出的rpc端口）;通过 RPC 接口获取区块详细结构
 curl -X POST http://localhost:9944 \
@@ -138,7 +138,7 @@ pallet-dataassets中的权重不能是定值
 offchain-worker实现IPFS连接
 
 
-guozheng@guozheng-VMware-Virtual-Platform:~/blockchain/solochain/assetxchain$ ./target/release/solochain-template-node key inspect --public 0000000000000000000000000000000000000000000000000000000000000001 --network substratete
+guozheng@guozheng-VMware-Virtual-Platform:~/blockchain/solochain/assetxchain$ ./target/release/assetxchain-node key inspect --public 0000000000000000000000000000000000000000000000000000000000000001 --network substratete
 Network ID/Version: substrate
   Public key (hex):   0x0000000000000000000000000000000000000000000000000000000000000001
   Account ID:         0x0000000000000000000000000000000000000000000000000000000000000001
@@ -182,7 +182,7 @@ patient vacuum betray accident patch glimpse refuse frame rally exchange half tr
 https://ui.use.ink/
 
 
-./target/release/solochain-template-node key generate --scheme sr25519
+./target/release/assetxchain-node key generate --scheme sr25519
 Secret phrase:       prefer forward neutral current fan fly vapor kid clinic party hurdle permit
   Network ID:        substrate
   Secret seed:       0x6e9e259f6286951bb2e6b48c2f84078ad04356a3e777d64aa544475882f698cd

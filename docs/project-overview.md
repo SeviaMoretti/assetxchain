@@ -25,9 +25,8 @@ Contracts
   ink! market standard and order-book market prototype
 ```
 
-The current node binary is still named `solochain-template-node`. Phase 5 keeps
-that name to avoid packaging churn while the runtime logic is customized around
-the data asset chain.
+The current node binary is named `assetxchain-node`, and the runtime package is
+named `assetxchain-runtime`.
 
 ## Data Asset Model
 
@@ -381,10 +380,10 @@ asset business model.
 Common commands:
 
 ```sh
-cargo check -p solochain-template-node
+cargo check -p assetxchain-node
 cargo build --release
-./target/release/solochain-template-node --dev --tmp
-./target/release/solochain-template-node purge-chain --dev
+./target/release/assetxchain-node --dev --tmp
+./target/release/assetxchain-node purge-chain --dev
 ```
 
 For the end-to-end developer smoke path, see
@@ -399,7 +398,7 @@ cargo build --release --features runtime-benchmarks
 Generate data assets weights:
 
 ```sh
-./target/release/solochain-template-node benchmark pallet \
+./target/release/assetxchain-node benchmark pallet \
   --chain dev \
   --pallet pallet_dataassets \
   --extrinsic "*" \

@@ -6,7 +6,7 @@ use sc_consensus_grandpa::SharedVoterState;
 use sc_service::{error::Error as ServiceError, Configuration, TaskManager, WarpSyncConfig};
 use sc_telemetry::{Telemetry, TelemetryWorker};
 use sc_transaction_pool_api::OffchainTransactionPoolFactory;
-use solochain_template_runtime::{self, apis::RuntimeApi, opaque::Block};
+use assetxchain_runtime::{self, apis::RuntimeApi, opaque::Block};
 use std::{sync::Arc, time::Duration};
 use sc_consensus_babe::{self, BabeParams, SlotProportion, BabeBlockImport};
 

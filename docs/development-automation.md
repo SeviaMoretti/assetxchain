@@ -317,8 +317,7 @@ Completed tasks:
 
 - Document `dataAssets_getAssetProof` with a complete JSON-RPC example.
 - Add runtime API query examples.
-- Keep the binary name as `solochain-template-node` for this phase and document
-  that decision.
+- Rename the node binary to `assetxchain-node` and update developer commands.
 - Clearly label `pallet-template` as a placeholder that is not part of the data
   asset MVP.
 - Add a smoke-test document for the MVP flow.
@@ -326,7 +325,7 @@ Completed tasks:
 Verification:
 
 ```sh
-cargo check -p solochain-template-node
+cargo check -p assetxchain-node
 ```
 
 Completion standard:
@@ -387,8 +386,8 @@ change.
 | `pallet-incentive` | `cargo test -p pallet-incentive` | `cargo check` |
 | `pallet-rewards` | `cargo test -p pallet-rewards` | `cargo check` |
 | `pallet-collaterals` | `cargo test -p pallet-collaterals` | `cargo check` |
-| Runtime config | `cargo check -p solochain-template-runtime` | `cargo check` |
-| Node/RPC | `cargo check -p solochain-template-node` | dev-chain smoke test |
+| Runtime config | `cargo check -p assetxchain-runtime` | `cargo check` |
+| Node/RPC | `cargo check -p assetxchain-node` | dev-chain smoke test |
 | ink! contracts | `cargo check -p market-standard` | `cargo check -p market-orderbook` |
 | Documentation | inspect markdown diff | no build required |
 

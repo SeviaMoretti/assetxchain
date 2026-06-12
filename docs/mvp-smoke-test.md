@@ -6,9 +6,9 @@ production IPFS, XCM, or storage-chain integration.
 ## 1. Build And Run
 
 ```sh
-cargo check -p solochain-template-node
+cargo check -p assetxchain-node
 cargo build --release
-./target/release/solochain-template-node --dev --tmp
+./target/release/assetxchain-node --dev --tmp
 ```
 
 Connect Polkadot-JS Apps to:

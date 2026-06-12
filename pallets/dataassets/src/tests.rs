@@ -290,3 +290,59 @@ fn transfer_certificate_rejects_non_owner_without_measurement() {
         assert_eq!(trade_measurements(), vec![asset_id]);
     });
 }
+
+#[test]
+fn transfer_certificate_rejects_expired_certificate_without_state_change() {
+    new_test_ext().execute_with(|| {
+        let (asset_id, _) = register_test_asset(1);
+
+        assert_ok!(DataAssets::issue_certificate(
+            RuntimeOrigin::signed(1),
+            asset_id,
+            2,
+            1,
+            Some(Timestamp::get() - 1),
+        ));
+
+        let cert_id = certificate_id(&asset_id, 1, 0);
+
+        assert_noop!(
+            DataAssets::transfer_certificate(RuntimeOrigin::signed(2), asset_id, cert_id, 3),
+            pallet_dataassets::Error::<Test>::CertificateNotActive,
+        );
+
+        let cert = DataAssets::get_certificate(&asset_id, &cert_id).unwrap();
+        assert_eq!(cert.owner, 2);
+        assert_eq!(cert.nonce, 0);
+        assert_eq!(trade_measurements(), vec![asset_id]);
+    });
+}
+
+#[test]
+fn transfer_certificate_rejects_revoked_certificate_without_measurement() {
+    new_test_ext().execute_with(|| {
+        let (asset_id, _) = register_test_asset(1);
+
+        assert_ok!(DataAssets::issue_certificate(
+            RuntimeOrigin::signed(1),
+            asset_id,
+            2,
+            1,
+            None,
+        ));
+
+        let cert_id = certificate_id(&asset_id, 1, 0);
+        assert_ok!(DataAssets::revoke_certificate(
+            RuntimeOrigin::signed(1),
+            asset_id,
+            cert_id,
+        ));
+
+        assert_noop!(
+            DataAssets::transfer_certificate(RuntimeOrigin::signed(2), asset_id, cert_id, 3),
+            pallet_dataassets::Error::<Test>::CertificateNotFound,
+        );
+        assert!(DataAssets::get_certificate(&asset_id, &cert_id).is_none());
+        assert_eq!(trade_measurements(), vec![asset_id]);
+    });
+}

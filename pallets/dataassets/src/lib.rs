@@ -253,6 +253,7 @@ pub mod pallet {
 
         NotAuthorized,
         AlreadyAuthorized,
+        CertificateNotActive,
     }
 
     #[pallet::hooks]
@@ -1033,6 +1034,10 @@ pub mod pallet {
                 .ok_or(Error::<T>::CertificateNotFound)?;
 
             ensure!(certificate.owner == *current_owner, Error::<T>::NotOwner);
+            ensure!(
+                certificate.is_valid(Self::current_timestamp()),
+                Error::<T>::CertificateNotActive
+            );
 
             let old_owner = certificate.owner.clone();
             certificate.owner = new_owner.clone();

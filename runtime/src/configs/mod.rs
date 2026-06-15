@@ -55,16 +55,16 @@ use crate::{Incentive, UNIT, asset_market_extension};
 const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(75);
 
 parameter_types! {
-	pub const BlockHashCount: BlockNumber = 2400;
-	pub const Version: RuntimeVersion = VERSION;
+    pub const BlockHashCount: BlockNumber = 2400;
+    pub const Version: RuntimeVersion = VERSION;
 
-	/// We allow for 2 seconds of compute with a 6 second average block time.
-	pub RuntimeBlockWeights: BlockWeights = BlockWeights::with_sensible_defaults(
-		Weight::from_parts(2u64 * WEIGHT_REF_TIME_PER_SECOND, u64::MAX),
-		NORMAL_DISPATCH_RATIO,
-	);
-	pub RuntimeBlockLength: BlockLength = BlockLength::max_with_normal_ratio(5 * 1024 * 1024, NORMAL_DISPATCH_RATIO);
-	pub const SS58Prefix: u8 = 42;
+    /// We allow for 2 seconds of compute with a 6 second average block time.
+    pub RuntimeBlockWeights: BlockWeights = BlockWeights::with_sensible_defaults(
+        Weight::from_parts(2u64 * WEIGHT_REF_TIME_PER_SECOND, u64::MAX),
+        NORMAL_DISPATCH_RATIO,
+    );
+    pub RuntimeBlockLength: BlockLength = BlockLength::max_with_normal_ratio(5 * 1024 * 1024, NORMAL_DISPATCH_RATIO);
+    pub const SS58Prefix: u8 = 42;
 }
 
 /// The default types are being injected by [`derive_impl`](`frame_support::derive_impl`) from
@@ -72,29 +72,29 @@ parameter_types! {
 /// but overridden as needed.
 #[derive_impl(frame_system::config_preludes::SolochainDefaultConfig)]
 impl frame_system::Config for Runtime {
-	/// The block type for the runtime.
-	type Block = Block;
-	/// Block & extrinsics weights: base values and limits.
-	type BlockWeights = RuntimeBlockWeights;
-	/// The maximum length of a block (in bytes).
-	type BlockLength = RuntimeBlockLength;
-	/// The identifier used to distinguish between accounts.
-	type AccountId = AccountId;
-	/// The type for storing how many extrinsics an account has signed.
-	type Nonce = Nonce;
-	/// The type for hashing blocks and tries.
-	type Hash = Hash;
-	/// Maximum number of block number to block hash mappings to keep (oldest pruned first).
-	type BlockHashCount = BlockHashCount;
-	/// The weight of database operations that the runtime can invoke.
-	type DbWeight = RocksDbWeight;
-	/// Version of the runtime.
-	type Version = Version;
-	/// The data to be stored in an account.
-	type AccountData = pallet_balances::AccountData<Balance>;
-	/// This is used as an identifier of the chain. 42 is the generic substrate prefix.
-	type SS58Prefix = SS58Prefix;
-	type MaxConsumers = frame_support::traits::ConstU32<16>;
+    /// The block type for the runtime.
+    type Block = Block;
+    /// Block & extrinsics weights: base values and limits.
+    type BlockWeights = RuntimeBlockWeights;
+    /// The maximum length of a block (in bytes).
+    type BlockLength = RuntimeBlockLength;
+    /// The identifier used to distinguish between accounts.
+    type AccountId = AccountId;
+    /// The type for storing how many extrinsics an account has signed.
+    type Nonce = Nonce;
+    /// The type for hashing blocks and tries.
+    type Hash = Hash;
+    /// Maximum number of block number to block hash mappings to keep (oldest pruned first).
+    type BlockHashCount = BlockHashCount;
+    /// The weight of database operations that the runtime can invoke.
+    type DbWeight = RocksDbWeight;
+    /// Version of the runtime.
+    type Version = Version;
+    /// The data to be stored in an account.
+    type AccountData = pallet_balances::AccountData<Balance>;
+    /// This is used as an identifier of the chain. 42 is the generic substrate prefix.
+    type SS58Prefix = SS58Prefix;
+    type MaxConsumers = frame_support::traits::ConstU32<16>;
 }
 
 // BABE参数
@@ -103,12 +103,12 @@ parameter_types! {
     // 2400 个 slot × 6 秒 = 4 小时一个 epoch
     pub const EpochDuration: u64 = (6 * HOURS) as u64;
     // pub const EpochDuration: u64 = 10_000_000;
-    
+
     // 期望的区块时间（毫秒）
     pub const ExpectedBlockTime: u64 = MILLI_SECS_PER_BLOCK;
-    
+
     // 报告延迟
-    pub const ReportLongevity: u64 = 
+    pub const ReportLongevity: u64 =
         ((DAYS as u64) * 7) as u64;
 }
 
@@ -144,13 +144,13 @@ impl pallet_session::Config for Runtime {
     type ValidatorIdOf = ValidatorIdOf;
     type ShouldEndSession = pallet_session::PeriodicSessions<Period, Offset>;
     type NextSessionRotation = pallet_session::PeriodicSessions<Period, Offset>;
-    // type ShouldEndSession = Babe; 
+    // type ShouldEndSession = Babe;
     // type NextSessionRotation = Babe;
     type SessionManager = Validator;
     type SessionHandler = <SessionKeys as OpaqueKeys>::KeyTypeIdProviders;
     type Keys = SessionKeys;
     type WeightInfo = ();
-	type DisablingStrategy = ();
+    type DisablingStrategy = ();
 }
 
 impl pallet_authorship::Config for Runtime {
@@ -167,98 +167,98 @@ impl pallet_authorship::Config for Runtime {
 // }
 
 impl pallet_grandpa::Config for Runtime {
-	type RuntimeEvent = RuntimeEvent;
+    type RuntimeEvent = RuntimeEvent;
 
-	type WeightInfo = ();
-	type MaxAuthorities = ConstU32<32>;
-	type MaxNominators = ConstU32<0>;
-	type MaxSetIdSessionEntries = ConstU64<0>;
+    type WeightInfo = ();
+    type MaxAuthorities = ConstU32<32>;
+    type MaxNominators = ConstU32<0>;
+    type MaxSetIdSessionEntries = ConstU64<0>;
 
-	type KeyOwnerProof = sp_core::Void;
-	type EquivocationReportSystem = ();
+    type KeyOwnerProof = sp_core::Void;
+    type EquivocationReportSystem = ();
 }
 
 impl pallet_timestamp::Config for Runtime {
-	/// A timestamp: milliseconds since the unix epoch.
-	type Moment = u64;
-	type OnTimestampSet = Babe;
-	type MinimumPeriod = ConstU64<{ SLOT_DURATION / 2 }>;
-	type WeightInfo = ();
+    /// A timestamp: milliseconds since the unix epoch.
+    type Moment = u64;
+    type OnTimestampSet = Babe;
+    type MinimumPeriod = ConstU64<{ SLOT_DURATION / 2 }>;
+    type WeightInfo = ();
 }
 
 impl pallet_balances::Config for Runtime {
-	type MaxLocks = ConstU32<50>; // 支持质押时的锁仓数量
-	type MaxReserves = (); // 支持多池储备，目前未启用
-	type ReserveIdentifier = [u8; 8]; // 区分不同的储备池的标识符（例如："DATA"）
-	/// The type for recording an account's balance.
-	type Balance = Balance;
-	/// The ubiquitous event type.
-	type RuntimeEvent = RuntimeEvent;
-	type DustRemoval = (); // 粉尘清理，关闭
-	type ExistentialDeposit = ConstU128<EXISTENTIAL_DEPOSIT>;
-	type AccountStore = System;
-	type WeightInfo = pallet_balances::weights::SubstrateWeight<Runtime>;
-	type FreezeIdentifier = RuntimeFreezeReason;
-	type MaxFreezes = VariantCountOf<RuntimeFreezeReason>;
-	type RuntimeHoldReason = RuntimeHoldReason;
-	type RuntimeFreezeReason = RuntimeFreezeReason;
-	type DoneSlashHandler = ();
+    type MaxLocks = ConstU32<50>; // 支持质押时的锁仓数量
+    type MaxReserves = (); // 支持多池储备，目前未启用
+    type ReserveIdentifier = [u8; 8]; // 区分不同的储备池的标识符（例如："DATA"）
+    /// The type for recording an account's balance.
+    type Balance = Balance;
+    /// The ubiquitous event type.
+    type RuntimeEvent = RuntimeEvent;
+    type DustRemoval = (); // 粉尘清理，关闭
+    type ExistentialDeposit = ConstU128<EXISTENTIAL_DEPOSIT>;
+    type AccountStore = System;
+    type WeightInfo = pallet_balances::weights::SubstrateWeight<Runtime>;
+    type FreezeIdentifier = RuntimeFreezeReason;
+    type MaxFreezes = VariantCountOf<RuntimeFreezeReason>;
+    type RuntimeHoldReason = RuntimeHoldReason;
+    type RuntimeFreezeReason = RuntimeFreezeReason;
+    type DoneSlashHandler = ();
 }
 
 parameter_types! {
-	pub FeeMultiplier: Multiplier = Multiplier::one();
+    pub FeeMultiplier: Multiplier = Multiplier::one();
 }
 
 impl pallet_transaction_payment::Config for Runtime {
-	type RuntimeEvent = RuntimeEvent;
-	type OnChargeTransaction = FungibleAdapter<Balances, ()>;
-	type OperationalFeeMultiplier = ConstU8<5>;
-	type WeightToFee = IdentityFee<Balance>;
-	type LengthToFee = IdentityFee<Balance>;
-	type FeeMultiplierUpdate = ConstFeeMultiplier<FeeMultiplier>;
-	type WeightInfo = pallet_transaction_payment::weights::SubstrateWeight<Runtime>;
+    type RuntimeEvent = RuntimeEvent;
+    type OnChargeTransaction = FungibleAdapter<Balances, ()>;
+    type OperationalFeeMultiplier = ConstU8<5>;
+    type WeightToFee = IdentityFee<Balance>;
+    type LengthToFee = IdentityFee<Balance>;
+    type FeeMultiplierUpdate = ConstFeeMultiplier<FeeMultiplier>;
+    type WeightInfo = pallet_transaction_payment::weights::SubstrateWeight<Runtime>;
 }
 
 impl pallet_sudo::Config for Runtime {
-	type RuntimeEvent = RuntimeEvent;
-	type RuntimeCall = RuntimeCall;
-	type WeightInfo = pallet_sudo::weights::SubstrateWeight<Runtime>;
+    type RuntimeEvent = RuntimeEvent;
+    type RuntimeCall = RuntimeCall;
+    type WeightInfo = pallet_sudo::weights::SubstrateWeight<Runtime>;
 }
 
 /// Configure the pallet-template in pallets/template.
 impl pallet_template::Config for Runtime {
-	type RuntimeEvent = RuntimeEvent;
-	type WeightInfo = pallet_template::weights::SubstrateWeight<Runtime>;
+    type RuntimeEvent = RuntimeEvent;
+    type WeightInfo = pallet_template::weights::SubstrateWeight<Runtime>;
 }
 
 parameter_types! {
     /// Base collateral amount: 2000 DATA
     /// This is the minimum collateral required for any asset
     pub const BaseCollateral: Balance = 2_000 * UNIT;
-    
+
     /// Collateral per MB: 100 DATA/MB
     /// Additional collateral based on data size
     pub const CollateralPerMB: Balance = 100 * UNIT;
-    
+
     /// Maximum collateral cap: 75000 DATA
     /// Upper limit to prevent excessive collateral requirements
     pub const MaxCollateral: Balance = 75_000 * UNIT;
 
-	/// Maximum number of release phases for collateral
-	pub const MaxReleasePhases: u32 = 5;
+    /// Maximum number of release phases for collateral
+    pub const MaxReleasePhases: u32 = 5;
 }
 
 impl pallet_dataassets::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
-    
+
     /// Use Balances pallet for collateral management
     type Currency = Balances;
-    
+
     /// Collateral configuration
     type BaseCollateral = BaseCollateral;
     type CollateralPerMB = CollateralPerMB;
     type MaxCollateral = MaxCollateral;
-    
+
     /// Asset metadata constraints
     type MaxNameLength = ConstU32<256>;
     type MaxDescriptionLength = ConstU32<1024>;
@@ -275,10 +275,10 @@ parameter_types! {
         (5 * 365 * 24 * 60 * 60 * 1000u64) / (MILLI_SECS_PER_BLOCK as u64)
     ) as BlockNumber;
     pub const MinVestedTransfer: Balance = 1 * UNIT;
-	pub const MaxVestingSchedules: u32 = 20;
-	pub const AllowedWithdrawReasons: WithdrawReasons = WithdrawReasons::from_bits(
-		WithdrawReasons::TRANSFER.bits() | WithdrawReasons::TRANSACTION_PAYMENT.bits()
-	).expect("Valid bits");
+    pub const MaxVestingSchedules: u32 = 20;
+    pub const AllowedWithdrawReasons: WithdrawReasons = WithdrawReasons::from_bits(
+        WithdrawReasons::TRANSFER.bits() | WithdrawReasons::TRANSACTION_PAYMENT.bits()
+    ).expect("Valid bits");
 }
 
 // 实现vesting配置
@@ -296,9 +296,9 @@ impl pallet_vesting::Config for Runtime {
 }
 
 parameter_types! {
-	pub const InitialReward: Balance = 5 * UNIT;
+    pub const InitialReward: Balance = 5 * UNIT;
     pub const RewardAdjustmentThreshold: Balance = 250_000_000 * UNIT;
-    pub const AdjustedReward: Balance = 1 * UNIT; 
+    pub const AdjustedReward: Balance = 1 * UNIT;
     pub const MaxSupply: Balance = 500_000_000 * UNIT;
 }
 
@@ -311,12 +311,12 @@ impl Get<AccountId> for BlockAuthor {
 }
 
 impl pallet_rewards::Config for Runtime {
-	type RuntimeEvent = RuntimeEvent;
-	type Currency = Balances;
-	type RewardReceiver = BlockAuthor;
-	type InitialReward = InitialReward;
-	type RewardAdjustmentThreshold = RewardAdjustmentThreshold;
-	type AdjustedReward = AdjustedReward;
+    type RuntimeEvent = RuntimeEvent;
+    type Currency = Balances;
+    type RewardReceiver = BlockAuthor;
+    type InitialReward = InitialReward;
+    type RewardAdjustmentThreshold = RewardAdjustmentThreshold;
+    type AdjustedReward = AdjustedReward;
     type MaxSupply = MaxSupply;
     type WeightInfo = pallet_rewards::weights::WeightInfo<Runtime>;
 }
@@ -324,65 +324,65 @@ impl pallet_rewards::Config for Runtime {
 parameter_types! {
     // 激励池初始余额：3亿 DAT (经济模型的30%)
     pub const InitialIncentivePool: Balance = 300_000_000 * UNIT;
-    
+
     // 动态释放比例：1%/月
     pub const DynamicReleaseRatio: Perbill = Perbill::from_percent(1);
-    
+
     // 数据创建者奖励参数
     pub const FirstCreateReward: Balance = 1_000 * UNIT; // 1000 DAT
     pub const QualityDataReward: Balance = 3_000 * UNIT; // 3000 DAT
     pub const LongTermShareRatio: Perbill = Perbill::from_perthousand(5); // 0.5%
     pub const QualityDataTradeThreshold: u32 = 10; // 10笔交易
-    
+
     // 市场运营者奖励参数
     pub const TopMarketMonthlyReward: Balance = 50_000 * UNIT; // 5万 DAT
-    
+
     // 交易者奖励参数
     pub const TraderRebateThreshold: Balance = 100_000 * UNIT; // 10万 DAT
     pub const TraderRebateRatio: Perbill = Perbill::from_percent(10); // 10%
     pub const LiquidityRewardRatio: Perbill = Perbill::from_perthousand(5); // 0.5‰
-    
+
     // 治理参与者奖励参数
     pub const GovernanceVotingRewardTotal: Balance = 5_000 * UNIT; // 5000 DAT
     pub const GovernanceProposalReward: Balance = 2_000 * UNIT; // 2000 DAT
-    
+
     // 验证节点奖励参数
     pub const ValidatorVerificationReward: Balance = 50 * UNIT; // 50 DAT
 }
 
 impl pallet_incentive::Config for Runtime {
-	type RuntimeEvent = RuntimeEvent;
-	type Currency = Balances;
-	type DataAssetProvider = DataAssets;
-	// 激励池配置
+    type RuntimeEvent = RuntimeEvent;
+    type Currency = Balances;
+    type DataAssetProvider = DataAssets;
+    // 激励池配置
     type InitialIncentivePool = InitialIncentivePool;
     type DynamicReleaseRatio = DynamicReleaseRatio;
-    
+
     // 数据创建者奖励配置
     type FirstCreateReward = FirstCreateReward;
     type QualityDataReward = QualityDataReward;
     type LongTermShareRatio = LongTermShareRatio;
     type QualityDataTradeThreshold = QualityDataTradeThreshold;
-    
+
     // 市场运营者奖励配置
     type TopMarketMonthlyReward = TopMarketMonthlyReward;
-    
+
     // 交易者奖励配置
     type TraderRebateThreshold = TraderRebateThreshold;
     type TraderRebateRatio = TraderRebateRatio;
     type LiquidityRewardRatio = LiquidityRewardRatio;
-    
+
     // 治理参与者奖励配置
     type GovernanceVotingRewardTotal = GovernanceVotingRewardTotal;
     type GovernanceProposalReward = GovernanceProposalReward;
-    
+
     // 验证节点奖励配置
     type ValidatorVerificationReward = ValidatorVerificationReward;
     type WeightInfo = pallet_incentive::weights::WeightInfo<Runtime>;
 }
 
 // 合约模块的常量
-pub const CENTS: Balance = UNIT / 100; 
+pub const CENTS: Balance = UNIT / 100;
 pub const MILLICENTS: Balance = CENTS / 1_000;
 
 // 押金计算逻辑，这里的15和6使用的是硬编码，分别对应每个item和每个byte的押金
@@ -398,7 +398,7 @@ parameter_types! {
     // 每次区块可以删除的最大存储项权重
     pub const DeletionWeightLimit: Weight = Weight::from_parts(500_000_000, 0);
     pub const DefaultDepositLimit: Balance = deposit(1024, 1024 * 1024);
-    pub const MaxCodeLen: u32 = 128 * 1024;
+    pub const MaxCodeLen: u32 = 120 * 1024;
     pub const MaxStorageKeyLen: u32 = 128;
     pub const MaxDebugBufferLen: u32 = 2 * 1024 * 1024;
     // UnsafeUnstableInterface用于开启实验性功能，生产环境y一般设为false
@@ -428,48 +428,48 @@ impl frame_support::traits::Randomness<Hash, BlockNumber> for BabeRandomnessAdap
 impl pallet_contracts::Config for Runtime {
     type Time = pallet_timestamp::Pallet<Runtime>;
     // 使用 pallet_babe或pallet_rand作为随机数源
-    type Randomness = BabeRandomnessAdapter; 
+    type Randomness = BabeRandomnessAdapter;
     type Currency = Balances;
     type RuntimeEvent = RuntimeEvent;
     type RuntimeCall = RuntimeCall;
-    
+
     // 允许所有合约调用，不设置过滤器
     type CallFilter = frame_support::traits::Nothing;
-    
+
     // 将权重转换为费用，使用 transaction-payment 模块
     type WeightPrice = pallet_transaction_payment::Pallet<Self>;
     type WeightInfo = pallet_contracts::weights::SubstrateWeight<Self>;
-    
+
     // 链扩展 (Chain Extension)，如果不需要自定义与 Runtime 交互的功能，设为 ()
     // 现在需要智能合约可以影响到数据资产的状态，因此需要引入数据资产扩展模块
-    type ChainExtension = asset_market_extension::DataAssetsExtension; 
-    
+    type ChainExtension = asset_market_extension::DataAssetsExtension;
+
     type Schedule = ContractsSchedule;
     type CallStack = [pallet_contracts::Frame<Self>; 5]; // 调用栈深度
     type DepositPerItem = DepositPerItem;
     type DepositPerByte = DepositPerByte;
     type DefaultDepositLimit = DefaultDepositLimit;
     type AddressGenerator = pallet_contracts::DefaultAddressGenerator;
-    
+
     // 代码与存储限制
-    type MaxCodeLen = ConstU32<{ 128 * 1024 }>;
+    type MaxCodeLen = ConstU32<{ 120 * 1024 }>;
     type MaxStorageKeyLen = ConstU32<128>;
-    
+
     // 开启不安全/不稳定接口 (仅限开发网或特定需求)
     type UnsafeUnstableInterface = ConstBool<true>;
-    
+
     // 调试缓冲区大小
     type MaxDebugBufferLen = ConstU32<{ 2 * 1024 * 1024 }>;
-    
+
     // 上传代码的权限：EnsureSigned表示允许任何签名账户上传
     type UploadOrigin = EnsureSigned<Self::AccountId>;
-    
+
     // 实例化合约的权限：允许任何签名账户实例化
     type InstantiateOrigin = EnsureSigned<Self::AccountId>;
 
     // 代码哈希锁定存款比例：通常设置为30%或0%
     type CodeHashLockupDepositPercent = CodeHashLockupDepositPercent;
-    
+
     // 最大代理依赖数：防止深层递归攻击
     type MaxDelegateDependencies = ConstU32<32>;
 
@@ -478,11 +478,11 @@ impl pallet_contracts::Config for Runtime {
     type RuntimeHoldReason = RuntimeHoldReason;
     type ApiVersion = ();
 
-    type Migrations = (); 
-    type Xcm = (); 
-    type Environment = (); 
-    
-    type Debug = (); 
+    type Migrations = ();
+    type Xcm = ();
+    type Environment = ();
+
+    type Debug = ();
 }
 
 parameter_types! {
@@ -508,7 +508,7 @@ impl pallet_validator::Config for Runtime {
     type AddRemoveOrigin = frame_system::EnsureRoot<AccountId>; // 设为Root权限，开发者-->超级管理
     type MinValidatorBond = MinValidatorBond;
     type MaxValidators = MaxValidators;
-    type ValidatorIdOf = ValidatorIdOf; 
+    type ValidatorIdOf = ValidatorIdOf;
     type IdentificationOf = ValidatorIdOf;
 }
 
@@ -521,10 +521,10 @@ impl pallet_im_online::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type NextSessionRotation = pallet_session::PeriodicSessions<Period, Offset>;
     // 将pallet_validator设为验证者集合提供者
-    type ValidatorSet = Validator; 
+    type ValidatorSet = Validator;
     // 将pallet_validator设为违规报告接收者
-    type ReportUnresponsiveness = Validator; 
-    
+    type ReportUnresponsiveness = Validator;
+
     type UnsignedPriority = UnsignedPriority;
     type WeightInfo = pallet_im_online::weights::SubstrateWeight<Runtime>;
     type MaxKeys = MaxValidators; // 使用定义的上限
@@ -557,9 +557,9 @@ parameter_types! {
     pub const MinMarketOperatorCollateral: Balance = 10_000 * UNIT;
     pub const MinIpfsProviderCollateral: Balance = 5_000 * UNIT;
     pub const MinGovernancePledge: Balance = 20_000 * UNIT;
-    
+
     // 资金池账户
-    pub const DestructionAccount: AccountId = AccountId::new([0u8; 32]); 
+    pub const DestructionAccount: AccountId = AccountId::new([0u8; 32]);
     pub const IncentivePoolAccount: AccountId = AccountId::new(hex_literal::hex!(
         "1a9de66d5ca5a6a7bad9add630d85b972f351082b0422e5f64c78a4eecc4a427"
     ));
@@ -570,16 +570,16 @@ parameter_types! {
 impl pallet_collaterals::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type Currency = Balances; // 使用 balances 模块进行质押
-    
+
     type MinMarketOperatorCollateral = MinMarketOperatorCollateral;
     type MinIpfsProviderCollateral = MinIpfsProviderCollateral;
     type MinGovernancePledge = MinGovernancePledge;
-    
+
     type IncentivePoolAccount = IncentivePoolAccount;
     type DestructionAccount = DestructionAccount;
     type IpfsPoolAccount = IpfsPoolAccount;
     type CompensationPoolAccount = CompensationPoolAccount;
-    
+
     type WeightInfo = pallet_collaterals::weights::WeightInfo<Runtime>;
 }
 

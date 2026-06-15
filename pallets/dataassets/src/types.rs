@@ -64,6 +64,27 @@ pub struct AssetStatistics {
 	pub total_revenue: u128,
 }// 这个数据更新频率较高，移动到主链-pallet中存储信息，可以添加更多的统计字段，如下载次数、活跃用户数等，避免频繁更新整个DataAsset结构体导致的性能问题
 
+/// Trade asset category recorded in settlement evidence.
+#[derive(Encode, Decode, DecodeWithMemTracking, Clone, Copy, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen)]
+pub enum TradeAssetType {
+	DataAsset,
+	Certificate,
+}
+
+/// Runtime trade settlement evidence for data asset market transactions.
+#[derive(Encode, Decode, DecodeWithMemTracking, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen)]
+pub struct TradeSettlement<AccountId, Balance, BlockNumber> {
+	pub trade_id: [u8; 32],
+	pub market: AccountId,
+	pub seller: AccountId,
+	pub buyer: AccountId,
+	pub asset_id: [u8; 32],
+	pub certificate_id: [u8; 32],
+	pub asset_type: TradeAssetType,
+	pub price: Balance,
+	pub settled_at: BlockNumber,
+}
+
 // ---- Main structures ----
 
 /// Data Asset Structure

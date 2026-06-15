@@ -38,6 +38,7 @@ pub const MILLI_SECS_PER_BLOCK: u64 = 6000;
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
+    use codec::Encode;
     use frame_support::pallet_prelude::*;
     use frame_support::storage::child;
     use frame_support::traits::{Currency, ReservableCurrency};
@@ -156,6 +157,19 @@ pub mod pallet {
         ValueQuery,
     >;
 
+    #[pallet::storage]
+    #[pallet::getter(fn trade_settlements)]
+    pub type TradeSettlements<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        [u8; 32],
+        TradeSettlement<T::AccountId, BalanceOf<T>, BlockNumberFor<T>>,
+        OptionQuery,
+    >;
+
+    #[pallet::storage]
+    pub type TradeSettlementNonce<T: Config> = StorageValue<_, u64, ValueQuery>;
+
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
@@ -181,6 +195,17 @@ pub mod pallet {
             certificate_id: [u8; 32],
             from: T::AccountId,
             to: T::AccountId,
+        },
+        TradeSettled {
+            trade_id: [u8; 32],
+            market: T::AccountId,
+            seller: T::AccountId,
+            buyer: T::AccountId,
+            asset_id: [u8; 32],
+            certificate_id: [u8; 32],
+            asset_type: TradeAssetType,
+            price: BalanceOf<T>,
+            settled_at: BlockNumberFor<T>,
         },
         CertificateRevoked {
             asset_id: [u8; 32],
@@ -342,7 +367,7 @@ pub mod pallet {
                 Vec::new(),
                 EncryptionInfo::default(),
             )
-            }
+        }
 
         #[pallet::call_index(12)]
         #[pallet::weight(<T as Config>::WeightInfo::register_asset())]
@@ -950,45 +975,160 @@ pub mod pallet {
             <pallet_timestamp::Pallet<T>>::get().saturated_into::<u64>()
         }
 
-        /// 供其他Pallet调用的方法，跳过签名检查，但检查授权
-        pub fn transfer_by_market_internal(
+        fn next_trade_settlement_nonce() -> u64 {
+            let current = TradeSettlementNonce::<T>::get();
+            TradeSettlementNonce::<T>::put(current.saturating_add(1));
+            current
+        }
+
+        fn generate_trade_id(
+            market: &T::AccountId,
+            buyer: &T::AccountId,
+            asset_id: &[u8; 32],
+            certificate_id: &[u8; 32],
+            settled_at: BlockNumberFor<T>,
+            nonce: u64,
+        ) -> [u8; 32] {
+            let input = (market, buyer, asset_id, certificate_id, settled_at, nonce).encode();
+            keccak_256(&input)
+        }
+
+        fn record_trade_settlement(
+            market: &T::AccountId,
+            seller: &T::AccountId,
+            buyer: &T::AccountId,
+            asset_id: &[u8; 32],
+            certificate_id: &[u8; 32],
+            asset_type: TradeAssetType,
+            price: BalanceOf<T>,
+        ) -> [u8; 32] {
+            let settled_at = frame_system::Pallet::<T>::block_number();
+            let nonce = Self::next_trade_settlement_nonce();
+            let trade_id =
+                Self::generate_trade_id(market, buyer, asset_id, certificate_id, settled_at, nonce);
+
+            let settlement = TradeSettlement {
+                trade_id,
+                market: market.clone(),
+                seller: seller.clone(),
+                buyer: buyer.clone(),
+                asset_id: *asset_id,
+                certificate_id: *certificate_id,
+                asset_type,
+                price,
+                settled_at,
+            };
+
+            TradeSettlements::<T>::insert(trade_id, settlement);
+            Self::deposit_event(Event::TradeSettled {
+                trade_id,
+                market: market.clone(),
+                seller: seller.clone(),
+                buyer: buyer.clone(),
+                asset_id: *asset_id,
+                certificate_id: *certificate_id,
+                asset_type,
+                price,
+                settled_at,
+            });
+
+            trade_id
+        }
+
+        fn transfer_asset_by_market_state(
             asset_id: &[u8; 32],
             market_account: &T::AccountId,
             new_owner: &T::AccountId,
-        ) -> DispatchResult {
-            // 1. 获取资产
+        ) -> Result<T::AccountId, DispatchError> {
             let mut asset = Self::get_asset(asset_id).ok_or(Error::<T>::AssetNotFound)?;
 
-            // 2. 核心检查：检查当前资产是否授权给了调用者 (market_account)
             let approved_account =
                 Self::asset_approvals(asset_id).ok_or(Error::<T>::NotAuthorized)?;
             ensure!(
                 approved_account == *market_account,
                 Error::<T>::NotAuthorized
             );
-
-            // 3. 检查锁定状态
             ensure!(!asset.is_locked(), Error::<T>::AssetLocked);
 
-            // 4. 执行转移
             let old_owner = asset.core.owner.clone();
             asset.core.owner = new_owner.clone();
             asset.core.nonce += 1;
             asset.core.status = AssetStatus::Private;
             asset.core.updated_at = Self::current_timestamp();
 
-            // 5. 保存并清理授权
             Self::insert_asset(asset_id, &asset)?;
             AssetApprovals::<T>::remove(asset_id);
             T::IncentiveHandler::register_asset_trade(asset_id);
-            // 6. 发出事件
             Self::deposit_event(Event::AssetTransferred {
                 asset_id: *asset_id,
-                from: old_owner,
+                from: old_owner.clone(),
                 to: new_owner.clone(),
             });
 
+            Ok(old_owner)
+        }
+
+        fn transfer_certificate_state(
+            asset_id: &[u8; 32],
+            certificate_id: &[u8; 32],
+            current_owner: &T::AccountId,
+            new_owner: &T::AccountId,
+        ) -> Result<T::AccountId, DispatchError> {
+            let _asset = Self::get_asset(asset_id).ok_or(Error::<T>::AssetNotFound)?;
+            let mut certificate = Self::get_certificate(asset_id, certificate_id)
+                .ok_or(Error::<T>::CertificateNotFound)?;
+
+            ensure!(certificate.owner == *current_owner, Error::<T>::NotOwner);
+            ensure!(
+                certificate.is_valid(Self::current_timestamp()),
+                Error::<T>::CertificateNotActive
+            );
+
+            let old_owner = certificate.owner.clone();
+            certificate.owner = new_owner.clone();
+            certificate.nonce = certificate.nonce.saturating_add(1);
+
+            Self::update_certificate(asset_id, &certificate)?;
+            T::IncentiveHandler::register_asset_trade(asset_id);
+
+            Self::deposit_event(Event::CertificateTransferred {
+                asset_id: *asset_id,
+                certificate_id: *certificate_id,
+                from: old_owner.clone(),
+                to: new_owner.clone(),
+            });
+
+            Ok(old_owner)
+        }
+
+        /// 供其他Pallet调用的方法，跳过签名检查，但检查授权
+        pub fn transfer_by_market_internal(
+            asset_id: &[u8; 32],
+            market_account: &T::AccountId,
+            new_owner: &T::AccountId,
+        ) -> DispatchResult {
+            let _seller =
+                Self::transfer_asset_by_market_state(asset_id, market_account, new_owner)?;
             Ok(())
+        }
+
+        pub fn settle_asset_trade_by_market_internal(
+            asset_id: &[u8; 32],
+            market_account: &T::AccountId,
+            buyer: &T::AccountId,
+            price: BalanceOf<T>,
+        ) -> Result<[u8; 32], DispatchError> {
+            let seller = Self::transfer_asset_by_market_state(asset_id, market_account, buyer)?;
+            let trade_id = Self::record_trade_settlement(
+                market_account,
+                &seller,
+                buyer,
+                asset_id,
+                &[0u8; 32],
+                TradeAssetType::DataAsset,
+                price,
+            );
+            Ok(trade_id)
         }
 
         pub fn issue_certificate_by_market_internal(
@@ -1059,31 +1199,34 @@ pub mod pallet {
             current_owner: &T::AccountId,
             new_owner: &T::AccountId,
         ) -> DispatchResult {
-            let _asset = Self::get_asset(asset_id).ok_or(Error::<T>::AssetNotFound)?;
-            let mut certificate = Self::get_certificate(asset_id, certificate_id)
-                .ok_or(Error::<T>::CertificateNotFound)?;
-
-            ensure!(certificate.owner == *current_owner, Error::<T>::NotOwner);
-            ensure!(
-                certificate.is_valid(Self::current_timestamp()),
-                Error::<T>::CertificateNotActive
-            );
-
-            let old_owner = certificate.owner.clone();
-            certificate.owner = new_owner.clone();
-            certificate.nonce = certificate.nonce.saturating_add(1);
-
-            Self::update_certificate(asset_id, &certificate)?;
-            T::IncentiveHandler::register_asset_trade(asset_id);
-
-            Self::deposit_event(Event::CertificateTransferred {
-                asset_id: *asset_id,
-                certificate_id: *certificate_id,
-                from: old_owner,
-                to: new_owner.clone(),
-            });
-
+            let _seller = Self::transfer_certificate_state(
+                asset_id,
+                certificate_id,
+                current_owner,
+                new_owner,
+            )?;
             Ok(())
+        }
+
+        pub fn settle_certificate_trade_internal(
+            asset_id: &[u8; 32],
+            certificate_id: &[u8; 32],
+            market_account: &T::AccountId,
+            buyer: &T::AccountId,
+            price: BalanceOf<T>,
+        ) -> Result<[u8; 32], DispatchError> {
+            let seller =
+                Self::transfer_certificate_state(asset_id, certificate_id, market_account, buyer)?;
+            let trade_id = Self::record_trade_settlement(
+                market_account,
+                &seller,
+                buyer,
+                asset_id,
+                certificate_id,
+                TradeAssetType::Certificate,
+                price,
+            );
+            Ok(trade_id)
         }
     }
 

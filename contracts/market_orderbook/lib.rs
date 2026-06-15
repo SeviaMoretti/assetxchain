@@ -209,7 +209,11 @@ mod market_orderbook {
 
             // 1. 先调用 Chain Extension 转移资产给买家，避免资产转移失败后仍给卖家付款。
             // 合约 (Self) -> 买家 (Caller)
-            if let Err(e) = self.env().extension().transfer_asset(asset_id, caller) {
+            if let Err(e) = self
+                .env()
+                .extension()
+                .settle_asset_trade(asset_id, caller, order.price)
+            {
                 order.status = OrderStatus::Failed;
                 order.settled_at = None;
                 self.orders.insert(asset_id, &order);
@@ -402,11 +406,12 @@ mod market_orderbook {
             order.buyer = Some(buyer);
             self.certificate_orders.insert(order_key, &order);
 
-            if let Err(e) =
-                self.env()
-                    .extension()
-                    .transfer_certificate(asset_id, certificate_id, buyer)
-            {
+            if let Err(e) = self.env().extension().settle_certificate_trade(
+                asset_id,
+                certificate_id,
+                buyer,
+                order.price,
+            ) {
                 order.status = OrderStatus::Failed;
                 order.settled_at = None;
                 self.certificate_orders.insert(order_key, &order);
@@ -555,6 +560,10 @@ mod market_orderbook {
                 RefCell::new(None);
             static RECORDED_CERTIFICATE_TRANSFER: RefCell<Option<(u16, [u8; 32], [u8; 32], AccountId)>> =
                 RefCell::new(None);
+            static RECORDED_ASSET_SETTLEMENT: RefCell<Option<(u16, [u8; 32], AccountId, Balance)>> =
+                RefCell::new(None);
+            static RECORDED_CERTIFICATE_SETTLEMENT: RefCell<Option<(u16, [u8; 32], [u8; 32], AccountId, Balance)>> =
+                RefCell::new(None);
             static RECORDED_CERTIFICATE_ISSUE: RefCell<
                 Option<(u16, [u8; 32], AccountId, AccountId, u8, Option<u64>)>,
             > = RefCell::new(None);
@@ -572,6 +581,8 @@ mod market_orderbook {
                     func_id == market_standard::TRANSFER_ASSET_FUNC_ID as u16
                         || func_id == market_standard::TRANSFER_CERT_FUNC_ID as u16
                         || func_id == market_standard::ISSUE_CERT_FUNC_ID as u16
+                        || func_id == market_standard::SETTLE_ASSET_TRADE_FUNC_ID as u16
+                        || func_id == market_standard::SETTLE_CERT_TRADE_FUNC_ID as u16
                 );
                 DataAssetsExtError::TransferFailed as u32
             }
@@ -592,12 +603,27 @@ mod market_orderbook {
                     RECORDED_ASSET_TRANSFER.with(|recorded| {
                         *recorded.borrow_mut() = Some((func_id, asset_id, buyer));
                     });
+                } else if func_id == market_standard::SETTLE_ASSET_TRADE_FUNC_ID as u16 {
+                    let (asset_id, buyer, price) =
+                        <([u8; 32], AccountId, Balance)>::decode(&mut &payload[..])
+                            .expect("valid asset settlement input");
+                    RECORDED_ASSET_SETTLEMENT.with(|recorded| {
+                        *recorded.borrow_mut() = Some((func_id, asset_id, buyer, price));
+                    });
                 } else if func_id == market_standard::TRANSFER_CERT_FUNC_ID as u16 {
                     let (asset_id, certificate_id, buyer) =
                         <([u8; 32], [u8; 32], AccountId)>::decode(&mut &payload[..])
                             .expect("valid certificate transfer input");
                     RECORDED_CERTIFICATE_TRANSFER.with(|recorded| {
                         *recorded.borrow_mut() = Some((func_id, asset_id, certificate_id, buyer));
+                    });
+                } else if func_id == market_standard::SETTLE_CERT_TRADE_FUNC_ID as u16 {
+                    let (asset_id, certificate_id, buyer, price) =
+                        <([u8; 32], [u8; 32], AccountId, Balance)>::decode(&mut &payload[..])
+                            .expect("valid certificate settlement input");
+                    RECORDED_CERTIFICATE_SETTLEMENT.with(|recorded| {
+                        *recorded.borrow_mut() =
+                            Some((func_id, asset_id, certificate_id, buyer, price));
                     });
                 } else if func_id == market_standard::ISSUE_CERT_FUNC_ID as u16 {
                     let (asset_id, issuer, buyer, right_type, valid_until) =
@@ -662,7 +688,7 @@ mod market_orderbook {
         #[ink::test]
         fn buy_asset_calls_transfer_asset_extension_with_asset_and_buyer() {
             let accounts = ink::env::test::default_accounts::<market_standard::CustomEnvironment>();
-            RECORDED_ASSET_TRANSFER.with(|recorded| *recorded.borrow_mut() = None);
+            RECORDED_ASSET_SETTLEMENT.with(|recorded| *recorded.borrow_mut() = None);
             ink::env::test::register_chain_extension(RecordingTransferExtension);
 
             let contract = accounts.alice;
@@ -683,13 +709,14 @@ mod market_orderbook {
 
             assert_eq!(market.buy_asset(asset_id), Ok(()));
 
-            RECORDED_ASSET_TRANSFER.with(|recorded| {
+            RECORDED_ASSET_SETTLEMENT.with(|recorded| {
                 assert_eq!(
                     *recorded.borrow(),
                     Some((
-                        market_standard::TRANSFER_ASSET_FUNC_ID as u16,
+                        market_standard::SETTLE_ASSET_TRADE_FUNC_ID as u16,
                         asset_id,
-                        buyer
+                        buyer,
+                        price
                     ))
                 );
             });
@@ -705,7 +732,7 @@ mod market_orderbook {
         #[ink::test]
         fn buy_certificate_calls_transfer_certificate_extension_with_certificate_and_buyer() {
             let accounts = ink::env::test::default_accounts::<market_standard::CustomEnvironment>();
-            RECORDED_CERTIFICATE_TRANSFER.with(|recorded| *recorded.borrow_mut() = None);
+            RECORDED_CERTIFICATE_SETTLEMENT.with(|recorded| *recorded.borrow_mut() = None);
             ink::env::test::register_chain_extension(RecordingTransferExtension);
 
             let contract = accounts.alice;
@@ -730,14 +757,15 @@ mod market_orderbook {
 
             assert_eq!(market.buy_certificate(asset_id, certificate_id), Ok(()));
 
-            RECORDED_CERTIFICATE_TRANSFER.with(|recorded| {
+            RECORDED_CERTIFICATE_SETTLEMENT.with(|recorded| {
                 assert_eq!(
                     *recorded.borrow(),
                     Some((
-                        market_standard::TRANSFER_CERT_FUNC_ID as u16,
+                        market_standard::SETTLE_CERT_TRADE_FUNC_ID as u16,
                         asset_id,
                         certificate_id,
-                        buyer
+                        buyer,
+                        price
                     ))
                 );
             });

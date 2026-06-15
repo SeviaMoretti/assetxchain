@@ -12,6 +12,8 @@ use sp_runtime::DispatchError;
 const TRANSFER_ASSET_FUNC_ID: u16 = 1;
 const TRANSFER_CERT_FUNC_ID: u16 = 2; // 新增：转移权证
 const ISSUE_CERT_FUNC_ID: u16 = 3; // 新增：发行权证
+const SETTLE_ASSET_TRADE_FUNC_ID: u16 = 4;
+const SETTLE_CERT_TRADE_FUNC_ID: u16 = 5;
 const TRANSFER_FAILED_STATUS: u32 = 1;
 const ASSET_NOT_FOUND_STATUS: u32 = 2;
 const PERMISSION_DENIED_STATUS: u32 = 3;
@@ -124,6 +126,48 @@ where
                     Err(error) => Ok(RetVal::Converging(dataassets_error_status::<T>(error))),
                 }
             }
+            SETTLE_ASSET_TRADE_FUNC_ID => {
+                log::debug!(target: "runtime", "DataAssetsExtension: Calling SETTLE_ASSET_TRADE_FUNC_ID");
+                let mut env = env.buf_in_buf_out();
+                let (asset_id, to_account, price): (
+                    [u8; 32],
+                    T::AccountId,
+                    pallet_dataassets::BalanceOf<T>,
+                ) = env.read_as()?;
+                let caller_account = env.ext().address().clone();
+
+                match pallet_dataassets::Pallet::<T>::settle_asset_trade_by_market_internal(
+                    &asset_id,
+                    &caller_account,
+                    &to_account,
+                    price,
+                ) {
+                    Ok(_) => Ok(RetVal::Converging(0)),
+                    Err(error) => Ok(RetVal::Converging(dataassets_error_status::<T>(error))),
+                }
+            }
+            SETTLE_CERT_TRADE_FUNC_ID => {
+                log::debug!(target: "runtime", "DataAssetsExtension: Calling SETTLE_CERT_TRADE_FUNC_ID");
+                let mut env = env.buf_in_buf_out();
+                let (asset_id, certificate_id, to_account, price): (
+                    [u8; 32],
+                    [u8; 32],
+                    T::AccountId,
+                    pallet_dataassets::BalanceOf<T>,
+                ) = env.read_as()?;
+                let caller_account = env.ext().address().clone();
+
+                match pallet_dataassets::Pallet::<T>::settle_certificate_trade_internal(
+                    &asset_id,
+                    &certificate_id,
+                    &caller_account,
+                    &to_account,
+                    price,
+                ) {
+                    Ok(_) => Ok(RetVal::Converging(0)),
+                    Err(error) => Ok(RetVal::Converging(dataassets_error_status::<T>(error))),
+                }
+            }
             _ => Err(DispatchError::Other("Unregistered function")),
         }
     }
@@ -146,5 +190,13 @@ mod tests {
         assert_eq!(ISSUE_CERT_FUNC_ID, 3);
         assert_ne!(ISSUE_CERT_FUNC_ID, TRANSFER_ASSET_FUNC_ID);
         assert_ne!(ISSUE_CERT_FUNC_ID, TRANSFER_CERT_FUNC_ID);
+    }
+
+    #[test]
+    fn settlement_function_ids_are_distinct_from_transfer_ids() {
+        assert_eq!(SETTLE_ASSET_TRADE_FUNC_ID, 4);
+        assert_eq!(SETTLE_CERT_TRADE_FUNC_ID, 5);
+        assert_ne!(SETTLE_ASSET_TRADE_FUNC_ID, TRANSFER_ASSET_FUNC_ID);
+        assert_ne!(SETTLE_CERT_TRADE_FUNC_ID, TRANSFER_CERT_FUNC_ID);
     }
 }

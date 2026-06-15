@@ -5,12 +5,16 @@ use ink::env::Environment;
 use ink::primitives::AccountId;
 use scale_info::TypeInfo;
 
+pub type Balance = <ink::env::DefaultEnvironment as Environment>::Balance;
+
 // 链扩展ID（u32类型）
 pub const DATA_ASSETS_EXT_ID: u32 = 1;
 pub const TRANSFER_ASSET_FUNC_ID: u32 = 1; // 方法ID
 pub const TRANSFER_CERT_FUNC_ID: u32 = 2; // 权证转移方法ID
 pub const ISSUE_CERT_FUNC_ID: u32 = 3; // 权证发行方法ID
-                                       // 链扩展错误码
+pub const SETTLE_ASSET_TRADE_FUNC_ID: u32 = 4; // 元证成交结算方法ID
+pub const SETTLE_CERT_TRADE_FUNC_ID: u32 = 5; // 权证成交结算方法ID
+                                              // 链扩展错误码
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Encode, Decode, TypeInfo)]
 #[cfg_attr(feature = "std", derive(serde::Serialize, serde::Deserialize))]
 pub enum DataAssetsExtError {
@@ -71,6 +75,25 @@ pub trait DataAssetsExt {
         holder: AccountId,
         right_type: u8,
         valid_until: Option<u64>,
+    ) -> Result<(), DataAssetsExtError>;
+
+    /// 结算元证交易并记录成交证据
+    /// 对应 Runtime 中的 func_id = 4
+    #[ink(function = 4)]
+    fn settle_asset_trade(
+        asset_id: [u8; 32],
+        to: AccountId,
+        price: Balance,
+    ) -> Result<(), DataAssetsExtError>;
+
+    /// 结算权证交易并记录成交证据
+    /// 对应 Runtime 中的 func_id = 5
+    #[ink(function = 5)]
+    fn settle_certificate_trade(
+        asset_id: [u8; 32],
+        certificate_id: [u8; 32],
+        to: AccountId,
+        price: Balance,
     ) -> Result<(), DataAssetsExtError>;
 }
 
@@ -209,16 +232,77 @@ mod tests {
 
         ink::EnvAccess::<CustomEnvironment>::default()
             .extension()
-            .issue_certificate(asset_id, accounts.alice, accounts.bob, right_type, valid_until)
+            .issue_certificate(
+                asset_id,
+                accounts.alice,
+                accounts.bob,
+                right_type,
+                valid_until,
+            )
             .expect("certificate issue succeeds");
 
-        let expected_payload =
-            (asset_id, accounts.alice, accounts.bob, right_type, valid_until).encode();
+        let expected_payload = (
+            asset_id,
+            accounts.alice,
+            accounts.bob,
+            right_type,
+            valid_until,
+        )
+            .encode();
         let expected_input = expected_payload.encode();
         CERTIFICATE_TRANSFER_CALL.with(|call| {
             assert_eq!(
                 *call.borrow(),
                 Some((ISSUE_CERT_FUNC_ID as u16, expected_input))
+            );
+        });
+    }
+
+    #[ink::test]
+    fn settle_asset_trade_extension_uses_function_id_4_and_expected_input() {
+        CERTIFICATE_TRANSFER_CALL.with(|call| *call.borrow_mut() = None);
+        test::register_chain_extension(RecordingCertificateTransferExtension);
+
+        let accounts = test::default_accounts::<CustomEnvironment>();
+        let asset_id = [10u8; 32];
+        let price = 500u128;
+
+        ink::EnvAccess::<CustomEnvironment>::default()
+            .extension()
+            .settle_asset_trade(asset_id, accounts.bob, price)
+            .expect("asset trade settlement succeeds");
+
+        let expected_payload = (asset_id, accounts.bob, price).encode();
+        let expected_input = expected_payload.encode();
+        CERTIFICATE_TRANSFER_CALL.with(|call| {
+            assert_eq!(
+                *call.borrow(),
+                Some((SETTLE_ASSET_TRADE_FUNC_ID as u16, expected_input))
+            );
+        });
+    }
+
+    #[ink::test]
+    fn settle_certificate_trade_extension_uses_function_id_5_and_expected_input() {
+        CERTIFICATE_TRANSFER_CALL.with(|call| *call.borrow_mut() = None);
+        test::register_chain_extension(RecordingCertificateTransferExtension);
+
+        let accounts = test::default_accounts::<CustomEnvironment>();
+        let asset_id = [11u8; 32];
+        let certificate_id = [12u8; 32];
+        let price = 250u128;
+
+        ink::EnvAccess::<CustomEnvironment>::default()
+            .extension()
+            .settle_certificate_trade(asset_id, certificate_id, accounts.bob, price)
+            .expect("certificate trade settlement succeeds");
+
+        let expected_payload = (asset_id, certificate_id, accounts.bob, price).encode();
+        let expected_input = expected_payload.encode();
+        CERTIFICATE_TRANSFER_CALL.with(|call| {
+            assert_eq!(
+                *call.borrow(),
+                Some((SETTLE_CERT_TRADE_FUNC_ID as u16, expected_input))
             );
         });
     }

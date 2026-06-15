@@ -1,5 +1,5 @@
 use crate as pallet_dataassets;
-use crate::types::{DataAsset, RightToken};
+use crate::types::{DataAsset, RightToken, TradeAssetType};
 use frame_support::{
     assert_noop, assert_ok, construct_runtime, derive_impl, parameter_types,
     traits::{ConstU128, ConstU32},
@@ -109,8 +109,7 @@ impl pallet_shared_traits::IncentiveHandler<AccountId, [u8; 32], Balance> for Tr
         recipient: &AccountId,
         asset_id: &[u8; 32],
     ) -> Result<(), &'static str> {
-        FIRST_CREATE_REWARDS
-            .with(|rewards| rewards.borrow_mut().push((*asset_id, *recipient)));
+        FIRST_CREATE_REWARDS.with(|rewards| rewards.borrow_mut().push((*asset_id, *recipient)));
         Ok(())
     }
 
@@ -190,6 +189,18 @@ fn certificate_id(asset_id: &[u8; 32], issuer: AccountId, token_id: u32) -> [u8;
     RightToken::generate_certificate_id(asset_id, Timestamp::get(), &issuer, token_id)
 }
 
+fn trade_settled_event_count() -> usize {
+    System::events()
+        .iter()
+        .filter(|record| {
+            matches!(
+                record.event,
+                RuntimeEvent::DataAssets(pallet_dataassets::Event::TradeSettled { .. })
+            )
+        })
+        .count()
+}
+
 #[test]
 fn register_asset_core_creates_asset_without_collateral_or_incentive() {
     new_test_ext().execute_with(|| {
@@ -256,6 +267,170 @@ fn authorized_market_can_issue_certificate_to_buyer() {
         assert_eq!(cert.issuer, owner);
         assert_eq!(cert.parent_asset_id, asset_id);
         assert_eq!(trade_measurements(), vec![asset_id]);
+    });
+}
+
+#[test]
+fn market_asset_settlement_records_trade_evidence() {
+    new_test_ext().execute_with(|| {
+        let owner: AccountId = 1;
+        let market: AccountId = 3;
+        let buyer: AccountId = 2;
+        let price: Balance = 250;
+        let (asset_id, _) = register_test_asset(owner);
+
+        assert_ok!(DataAssets::authorize_market(
+            RuntimeOrigin::signed(owner),
+            asset_id,
+            market,
+        ));
+
+        let trade_id =
+            DataAssets::settle_asset_trade_by_market_internal(&asset_id, &market, &buyer, price)
+                .expect("authorized market settles asset trade");
+
+        let asset = DataAssets::get_asset(&asset_id).unwrap();
+        assert_eq!(asset.core.owner, buyer);
+
+        let settlement =
+            DataAssets::trade_settlements(trade_id).expect("trade settlement is stored");
+        assert_eq!(settlement.trade_id, trade_id);
+        assert_eq!(settlement.market, market);
+        assert_eq!(settlement.seller, owner);
+        assert_eq!(settlement.buyer, buyer);
+        assert_eq!(settlement.asset_id, asset_id);
+        assert_eq!(settlement.certificate_id, [0u8; 32]);
+        assert_eq!(settlement.asset_type, TradeAssetType::DataAsset);
+        assert_eq!(settlement.price, price);
+        assert_eq!(settlement.settled_at, System::block_number());
+
+        System::assert_has_event(RuntimeEvent::DataAssets(
+            pallet_dataassets::Event::AssetTransferred {
+                asset_id,
+                from: owner,
+                to: buyer,
+            },
+        ));
+        System::assert_has_event(RuntimeEvent::DataAssets(
+            pallet_dataassets::Event::TradeSettled {
+                trade_id,
+                market,
+                seller: owner,
+                buyer,
+                asset_id,
+                certificate_id: [0u8; 32],
+                asset_type: TradeAssetType::DataAsset,
+                price,
+                settled_at: System::block_number(),
+            },
+        ));
+    });
+}
+
+#[test]
+fn failed_market_asset_settlement_does_not_record_trade_evidence() {
+    new_test_ext().execute_with(|| {
+        let owner: AccountId = 1;
+        let market: AccountId = 3;
+        let buyer: AccountId = 2;
+        let price: Balance = 250;
+        let (asset_id, _) = register_test_asset(owner);
+
+        assert_noop!(
+            DataAssets::settle_asset_trade_by_market_internal(&asset_id, &market, &buyer, price),
+            pallet_dataassets::Error::<Test>::NotAuthorized,
+        );
+
+        let asset = DataAssets::get_asset(&asset_id).unwrap();
+        assert_eq!(asset.core.owner, owner);
+        assert_eq!(trade_settled_event_count(), 0);
+    });
+}
+
+#[test]
+fn market_certificate_settlement_records_trade_evidence() {
+    new_test_ext().execute_with(|| {
+        let owner: AccountId = 1;
+        let market: AccountId = 3;
+        let buyer: AccountId = 2;
+        let price: Balance = 75;
+        let (asset_id, _) = register_test_asset(owner);
+
+        assert_ok!(DataAssets::issue_certificate(
+            RuntimeOrigin::signed(owner),
+            asset_id,
+            market,
+            1,
+            None,
+        ));
+        let cert_id = certificate_id(&asset_id, owner, 0);
+
+        let trade_id = DataAssets::settle_certificate_trade_internal(
+            &asset_id, &cert_id, &market, &buyer, price,
+        )
+        .expect("certificate holder market settles certificate trade");
+
+        let cert = DataAssets::get_certificate(&asset_id, &cert_id).unwrap();
+        assert_eq!(cert.owner, buyer);
+
+        let settlement =
+            DataAssets::trade_settlements(trade_id).expect("trade settlement is stored");
+        assert_eq!(settlement.trade_id, trade_id);
+        assert_eq!(settlement.market, market);
+        assert_eq!(settlement.seller, market);
+        assert_eq!(settlement.buyer, buyer);
+        assert_eq!(settlement.asset_id, asset_id);
+        assert_eq!(settlement.certificate_id, cert_id);
+        assert_eq!(settlement.asset_type, TradeAssetType::Certificate);
+        assert_eq!(settlement.price, price);
+        assert_eq!(settlement.settled_at, System::block_number());
+
+        System::assert_has_event(RuntimeEvent::DataAssets(
+            pallet_dataassets::Event::CertificateTransferred {
+                asset_id,
+                certificate_id: cert_id,
+                from: market,
+                to: buyer,
+            },
+        ));
+        System::assert_has_event(RuntimeEvent::DataAssets(
+            pallet_dataassets::Event::TradeSettled {
+                trade_id,
+                market,
+                seller: market,
+                buyer,
+                asset_id,
+                certificate_id: cert_id,
+                asset_type: TradeAssetType::Certificate,
+                price,
+                settled_at: System::block_number(),
+            },
+        ));
+    });
+}
+
+#[test]
+fn failed_market_certificate_settlement_does_not_record_trade_evidence() {
+    new_test_ext().execute_with(|| {
+        let owner: AccountId = 1;
+        let market: AccountId = 3;
+        let buyer: AccountId = 2;
+        let price: Balance = 75;
+        let (asset_id, _) = register_test_asset(owner);
+        let missing_cert_id = [9u8; 32];
+
+        assert_noop!(
+            DataAssets::settle_certificate_trade_internal(
+                &asset_id,
+                &missing_cert_id,
+                &market,
+                &buyer,
+                price,
+            ),
+            pallet_dataassets::Error::<Test>::CertificateNotFound,
+        );
+
+        assert_eq!(trade_settled_event_count(), 0);
     });
 }
 

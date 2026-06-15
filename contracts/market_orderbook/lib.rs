@@ -8,6 +8,31 @@ mod market_orderbook {
     use super::*;
     use ink::storage::Mapping;
 
+    /// 订单资产类型
+    #[derive(codec::Decode, codec::Encode, Debug, Clone, Copy, PartialEq, Eq)]
+    #[cfg_attr(
+        feature = "std",
+        derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout)
+    )]
+    pub enum AssetType {
+        DataAsset,
+        Certificate,
+    }
+
+    /// 订单状态
+    #[derive(codec::Decode, codec::Encode, Debug, Clone, Copy, PartialEq, Eq)]
+    #[cfg_attr(
+        feature = "std",
+        derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout)
+    )]
+    pub enum OrderStatus {
+        Listed,
+        Locked,
+        Settled,
+        Cancelled,
+        Failed,
+    }
+
     /// 订单信息
     #[derive(codec::Decode, codec::Encode, Debug, Clone)]
     #[cfg_attr(
@@ -16,8 +41,15 @@ mod market_orderbook {
     )]
     pub struct Order {
         pub seller: AccountId,
+        pub buyer: Option<AccountId>,
         pub price: Balance,
-        pub active: bool,
+        pub asset_type: AssetType,
+        pub asset_id: [u8; 32],
+        pub certificate_id: [u8; 32],
+        pub right_type: u8,
+        pub status: OrderStatus,
+        pub created_at: BlockNumber,
+        pub settled_at: Option<BlockNumber>,
     }
 
     #[ink(storage)]
@@ -92,6 +124,8 @@ mod market_orderbook {
         InsufficientPayment,
         /// 转账失败
         TransferFailed,
+        /// 订单状态不允许当前操作
+        InvalidOrderStatus,
     }
 
     // 将链扩展错误转换为合约错误
@@ -128,8 +162,15 @@ mod market_orderbook {
             // 记录订单
             let order = Order {
                 seller: caller,
+                buyer: None,
                 price,
-                active: true,
+                asset_type: AssetType::DataAsset,
+                asset_id,
+                certificate_id: [0u8; 32],
+                right_type: 0,
+                status: OrderStatus::Listed,
+                created_at: self.env().block_number(),
+                settled_at: None,
             };
             self.orders.insert(asset_id, &order);
 
@@ -148,25 +189,43 @@ mod market_orderbook {
         /// 买家支付 native token，合约将 Asset 通过 Extension 转给买家
         #[ink(message, payable)]
         pub fn buy_asset(&mut self, asset_id: [u8; 32]) -> Result<(), Error> {
-            let order = self.orders.get(asset_id).ok_or(Error::AssetNotFound)?;
+            let mut order = self.orders.get(asset_id).ok_or(Error::AssetNotFound)?;
             let caller = self.env().caller();
             let transferred_val = self.env().transferred_value();
+
+            if order.status != OrderStatus::Listed {
+                return Err(Error::InvalidOrderStatus);
+            }
 
             if transferred_val < order.price {
                 return Err(Error::InsufficientPayment);
             }
 
+            order.status = OrderStatus::Locked;
+            order.buyer = Some(caller);
+            self.orders.insert(asset_id, &order);
+
             // 1. 先调用 Chain Extension 转移资产给买家，避免资产转移失败后仍给卖家付款。
             // 合约 (Self) -> 买家 (Caller)
-            self.env().extension().transfer_asset(asset_id, caller)?;
+            if let Err(e) = self.env().extension().transfer_asset(asset_id, caller) {
+                order.status = OrderStatus::Failed;
+                order.settled_at = None;
+                self.orders.insert(asset_id, &order);
+                return Err(Error::ChainExtension(e));
+            }
 
             // 2. 给卖家转钱 (Native Token)
             if self.env().transfer(order.seller, order.price).is_err() {
+                order.status = OrderStatus::Failed;
+                order.settled_at = None;
+                self.orders.insert(asset_id, &order);
                 return Err(Error::TransferFailed);
             }
 
-            // 3. 清理存储
-            self.orders.remove(asset_id);
+            // 3. 保留已结算订单用于后续统计和审计。
+            order.status = OrderStatus::Settled;
+            order.settled_at = Some(self.env().block_number());
+            self.orders.insert(asset_id, &order);
 
             // 4. 报告交易结果 (Standard Trait)
             // 现在生成一个假的 trade_id 用于演示
@@ -198,8 +257,15 @@ mod market_orderbook {
             let seller = self.env().caller();
             let order = Order {
                 seller,
+                buyer: None,
                 price,
-                active: true,
+                asset_type: AssetType::Certificate,
+                asset_id,
+                certificate_id,
+                right_type: 0,
+                status: OrderStatus::Listed,
+                created_at: self.env().block_number(),
+                settled_at: None,
             };
             self.certificate_orders.insert(order_key, &order);
 
@@ -221,26 +287,46 @@ mod market_orderbook {
             certificate_id: [u8; 32],
         ) -> Result<(), Error> {
             let order_key = (asset_id, certificate_id);
-            let order = self
+            let mut order = self
                 .certificate_orders
                 .get(order_key)
                 .ok_or(Error::AssetNotFound)?;
             let buyer = self.env().caller();
             let transferred_val = self.env().transferred_value();
 
+            if order.status != OrderStatus::Listed {
+                return Err(Error::InvalidOrderStatus);
+            }
+
             if transferred_val < order.price {
                 return Err(Error::InsufficientPayment);
             }
 
-            self.env()
-                .extension()
-                .transfer_certificate(asset_id, certificate_id, buyer)?;
+            order.status = OrderStatus::Locked;
+            order.buyer = Some(buyer);
+            self.certificate_orders.insert(order_key, &order);
+
+            if let Err(e) =
+                self.env()
+                    .extension()
+                    .transfer_certificate(asset_id, certificate_id, buyer)
+            {
+                order.status = OrderStatus::Failed;
+                order.settled_at = None;
+                self.certificate_orders.insert(order_key, &order);
+                return Err(Error::ChainExtension(e));
+            }
 
             if self.env().transfer(order.seller, order.price).is_err() {
+                order.status = OrderStatus::Failed;
+                order.settled_at = None;
+                self.certificate_orders.insert(order_key, &order);
                 return Err(Error::TransferFailed);
             }
 
-            self.certificate_orders.remove(order_key);
+            order.status = OrderStatus::Settled;
+            order.settled_at = Some(self.env().block_number());
+            self.certificate_orders.insert(order_key, &order);
             self.report_trade_result([2u8; 32], true);
 
             self.env().emit_event(CertificateSold {
@@ -249,6 +335,65 @@ mod market_orderbook {
                 buyer,
                 price: order.price,
             });
+
+            Ok(())
+        }
+
+        /// 卖方撤销资产订单并通过链扩展取回托管资产。
+        #[ink(message)]
+        pub fn cancel_asset_order(&mut self, asset_id: [u8; 32]) -> Result<(), Error> {
+            let mut order = self.orders.get(asset_id).ok_or(Error::AssetNotFound)?;
+            let caller = self.env().caller();
+
+            if order.seller != caller {
+                return Err(Error::NotOwner);
+            }
+
+            if order.status != OrderStatus::Listed {
+                return Err(Error::InvalidOrderStatus);
+            }
+
+            self.env().extension().transfer_asset(asset_id, caller)?;
+
+            order.status = OrderStatus::Cancelled;
+            self.orders.insert(asset_id, &order);
+
+            self.env().emit_event(AssetWithdrawn {
+                asset_id,
+                owner: caller,
+            });
+
+            Ok(())
+        }
+
+        /// 卖方撤销权证订单并通过链扩展取回托管权证。
+        #[ink(message)]
+        pub fn cancel_certificate_order(
+            &mut self,
+            asset_id: [u8; 32],
+            certificate_id: [u8; 32],
+        ) -> Result<(), Error> {
+            let order_key = (asset_id, certificate_id);
+            let mut order = self
+                .certificate_orders
+                .get(order_key)
+                .ok_or(Error::AssetNotFound)?;
+            let caller = self.env().caller();
+
+            if order.seller != caller {
+                return Err(Error::NotOwner);
+            }
+
+            if order.status != OrderStatus::Listed {
+                return Err(Error::InvalidOrderStatus);
+            }
+
+            self.env()
+                .extension()
+                .transfer_certificate(asset_id, certificate_id, caller)?;
+
+            order.status = OrderStatus::Cancelled;
+            self.certificate_orders.insert(order_key, &order);
 
             Ok(())
         }
@@ -292,28 +437,8 @@ mod market_orderbook {
 
         #[ink(message)]
         fn asset_leave(&mut self, asset_id: [u8; 32]) {
-            // 用户撤单逻辑
-            let caller = self.env().caller();
-            if let Some(order) = self.orders.get(asset_id) {
-                if order.seller == caller {
-                    // 1. 删除订单
-                    self.orders.remove(asset_id);
-
-                    // 2. 调用 Chain Extension 退还资产
-                    // 合约 -> 卖家
-                    let result = self.env().extension().transfer_asset(asset_id, caller);
-
-                    if result.is_err() {
-                        // 应该处理panic或回滚，这里打印日志
-                        ink::env::debug_println!("Extension transfer failed!");
-                        panic!("Failed to return asset via extension");
-                    }
-
-                    self.env().emit_event(AssetWithdrawn {
-                        asset_id,
-                        owner: caller,
-                    });
-                }
+            if let Err(e) = self.cancel_asset_order(asset_id) {
+                ink::env::debug_println!("Asset leave failed: {:?}", e);
             }
         }
 
@@ -382,7 +507,7 @@ mod market_orderbook {
         }
 
         #[ink::test]
-        fn failed_asset_transfer_keeps_payment_and_order_untouched() {
+        fn failed_asset_transfer_keeps_payment_and_marks_order_failed() {
             let accounts = ink::env::test::default_accounts::<market_standard::CustomEnvironment>();
             ink::env::test::register_chain_extension(FailingTransferExtension);
 
@@ -415,7 +540,13 @@ mod market_orderbook {
                 ink::env::test::get_account_balance::<market_standard::CustomEnvironment>(seller)
                     .unwrap();
             assert_eq!(seller_balance_after, seller_balance_before);
-            assert!(market.orders.contains(asset_id));
+            let order = market
+                .orders
+                .get(asset_id)
+                .expect("failed asset order remains");
+            assert_eq!(order.buyer, Some(buyer));
+            assert_eq!(order.status, OrderStatus::Failed);
+            assert_eq!(order.settled_at, None);
         }
 
         #[ink::test]
@@ -452,7 +583,13 @@ mod market_orderbook {
                     ))
                 );
             });
-            assert!(!market.orders.contains(asset_id));
+            let order = market
+                .orders
+                .get(asset_id)
+                .expect("settled asset order remains");
+            assert_eq!(order.buyer, Some(buyer));
+            assert_eq!(order.status, OrderStatus::Settled);
+            assert!(order.settled_at.is_some());
         }
 
         #[ink::test]
@@ -494,13 +631,17 @@ mod market_orderbook {
                     ))
                 );
             });
-            assert!(!market
+            let order = market
                 .certificate_orders
-                .contains((asset_id, certificate_id)));
+                .get((asset_id, certificate_id))
+                .expect("settled certificate order remains");
+            assert_eq!(order.buyer, Some(buyer));
+            assert_eq!(order.status, OrderStatus::Settled);
+            assert!(order.settled_at.is_some());
         }
 
         #[ink::test]
-        fn failed_certificate_transfer_keeps_payment_and_order_untouched() {
+        fn failed_certificate_transfer_keeps_payment_and_marks_order_failed() {
             let accounts = ink::env::test::default_accounts::<market_standard::CustomEnvironment>();
             ink::env::test::register_chain_extension(FailingTransferExtension);
 
@@ -537,9 +678,388 @@ mod market_orderbook {
                 ink::env::test::get_account_balance::<market_standard::CustomEnvironment>(seller)
                     .unwrap();
             assert_eq!(seller_balance_after, seller_balance_before);
-            assert!(market
+            let order = market
                 .certificate_orders
-                .contains((asset_id, certificate_id)));
+                .get((asset_id, certificate_id))
+                .expect("failed certificate order remains");
+            assert_eq!(order.buyer, Some(buyer));
+            assert_eq!(order.status, OrderStatus::Failed);
+            assert_eq!(order.settled_at, None);
+        }
+
+        #[ink::test]
+        fn listed_asset_order_records_full_state() {
+            let accounts = ink::env::test::default_accounts::<market_standard::CustomEnvironment>();
+            let seller = accounts.bob;
+            let asset_id = [13u8; 32];
+            let price = 100;
+
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(seller);
+
+            let mut market = MarketOrderbook::new(0);
+            assert_eq!(market.list_asset(asset_id, price), Ok(()));
+
+            let order = market.orders.get(asset_id).expect("asset order exists");
+            assert_eq!(order.seller, seller);
+            assert_eq!(order.buyer, None);
+            assert_eq!(order.price, price);
+            assert_eq!(order.asset_type, AssetType::DataAsset);
+            assert_eq!(order.asset_id, asset_id);
+            assert_eq!(order.certificate_id, [0u8; 32]);
+            assert_eq!(order.right_type, 0);
+            assert_eq!(order.status, OrderStatus::Listed);
+            assert_eq!(order.settled_at, None);
+        }
+
+        #[ink::test]
+        fn listed_certificate_order_records_full_state() {
+            let accounts = ink::env::test::default_accounts::<market_standard::CustomEnvironment>();
+            let seller = accounts.bob;
+            let asset_id = [14u8; 32];
+            let certificate_id = [15u8; 32];
+            let price = 100;
+
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(seller);
+
+            let mut market = MarketOrderbook::new(0);
+            assert_eq!(
+                market.list_certificate(asset_id, certificate_id, price),
+                Ok(())
+            );
+
+            let order = market
+                .certificate_orders
+                .get((asset_id, certificate_id))
+                .expect("certificate order exists");
+            assert_eq!(order.seller, seller);
+            assert_eq!(order.buyer, None);
+            assert_eq!(order.price, price);
+            assert_eq!(order.asset_type, AssetType::Certificate);
+            assert_eq!(order.asset_id, asset_id);
+            assert_eq!(order.certificate_id, certificate_id);
+            assert_eq!(order.status, OrderStatus::Listed);
+            assert_eq!(order.settled_at, None);
+        }
+
+        #[ink::test]
+        fn insufficient_payment_leaves_asset_order_listed() {
+            let accounts = ink::env::test::default_accounts::<market_standard::CustomEnvironment>();
+            let seller = accounts.bob;
+            let buyer = accounts.charlie;
+            let asset_id = [16u8; 32];
+            let price = 100;
+
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(seller);
+
+            let mut market = MarketOrderbook::new(0);
+            assert_eq!(market.list_asset(asset_id, price), Ok(()));
+
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(buyer);
+            ink::env::test::transfer_in::<market_standard::CustomEnvironment>(price - 1);
+
+            assert_eq!(market.buy_asset(asset_id), Err(Error::InsufficientPayment));
+
+            let order = market.orders.get(asset_id).expect("asset order remains");
+            assert_eq!(order.buyer, None);
+            assert_eq!(order.status, OrderStatus::Listed);
+            assert_eq!(order.settled_at, None);
+        }
+
+        #[ink::test]
+        fn failed_asset_settlement_marks_order_failed_without_removing_it() {
+            let accounts = ink::env::test::default_accounts::<market_standard::CustomEnvironment>();
+            ink::env::test::register_chain_extension(FailingTransferExtension);
+
+            let contract = accounts.alice;
+            let seller = accounts.bob;
+            let buyer = accounts.charlie;
+            let asset_id = [17u8; 32];
+            let price = 100;
+
+            ink::env::test::set_callee::<market_standard::CustomEnvironment>(contract);
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(seller);
+
+            let mut market = MarketOrderbook::new(0);
+            assert_eq!(market.list_asset(asset_id, price), Ok(()));
+
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(buyer);
+            ink::env::test::transfer_in::<market_standard::CustomEnvironment>(price);
+
+            assert_eq!(
+                market.buy_asset(asset_id),
+                Err(Error::ChainExtension(DataAssetsExtError::TransferFailed))
+            );
+
+            let order = market.orders.get(asset_id).expect("asset order remains");
+            assert_eq!(order.buyer, Some(buyer));
+            assert_eq!(order.status, OrderStatus::Failed);
+            assert_eq!(order.settled_at, None);
+        }
+
+        #[ink::test]
+        fn seller_payment_failure_marks_asset_order_failed() {
+            let accounts = ink::env::test::default_accounts::<market_standard::CustomEnvironment>();
+            ink::env::test::register_chain_extension(RecordingTransferExtension);
+
+            let contract = AccountId::from([99u8; 32]);
+            let seller = accounts.bob;
+            let buyer = accounts.charlie;
+            let asset_id = [28u8; 32];
+            let price = 100;
+
+            ink::env::test::set_callee::<market_standard::CustomEnvironment>(contract);
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(seller);
+
+            let mut market = MarketOrderbook::new(0);
+            assert_eq!(market.list_asset(asset_id, price), Ok(()));
+
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(buyer);
+            ink::env::test::set_callee::<market_standard::CustomEnvironment>(contract);
+            ink::env::test::set_value_transferred::<market_standard::CustomEnvironment>(price);
+
+            assert_eq!(market.buy_asset(asset_id), Err(Error::TransferFailed));
+
+            let order = market.orders.get(asset_id).expect("asset order remains");
+            assert_eq!(order.buyer, Some(buyer));
+            assert_eq!(order.status, OrderStatus::Failed);
+            assert_eq!(order.settled_at, None);
+        }
+
+        #[ink::test]
+        fn successful_certificate_purchase_records_settled_status() {
+            let accounts = ink::env::test::default_accounts::<market_standard::CustomEnvironment>();
+            ink::env::test::register_chain_extension(RecordingTransferExtension);
+
+            let contract = accounts.alice;
+            let seller = accounts.bob;
+            let buyer = accounts.charlie;
+            let asset_id = [18u8; 32];
+            let certificate_id = [19u8; 32];
+            let price = 100;
+
+            ink::env::test::set_callee::<market_standard::CustomEnvironment>(contract);
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(seller);
+
+            let mut market = MarketOrderbook::new(0);
+            assert_eq!(
+                market.list_certificate(asset_id, certificate_id, price),
+                Ok(())
+            );
+
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(buyer);
+            ink::env::test::set_callee::<market_standard::CustomEnvironment>(contract);
+            ink::env::test::transfer_in::<market_standard::CustomEnvironment>(price);
+
+            assert_eq!(market.buy_certificate(asset_id, certificate_id), Ok(()));
+
+            let order = market
+                .certificate_orders
+                .get((asset_id, certificate_id))
+                .expect("settled certificate order remains for audit");
+            assert_eq!(order.buyer, Some(buyer));
+            assert_eq!(order.status, OrderStatus::Settled);
+            assert!(order.settled_at.is_some());
+        }
+
+        #[ink::test]
+        fn settled_asset_order_cannot_be_listed_again_and_overwritten() {
+            let accounts = ink::env::test::default_accounts::<market_standard::CustomEnvironment>();
+            ink::env::test::register_chain_extension(RecordingTransferExtension);
+
+            let contract = accounts.alice;
+            let seller = accounts.bob;
+            let buyer = accounts.charlie;
+            let asset_id = [27u8; 32];
+            let price = 100;
+
+            ink::env::test::set_callee::<market_standard::CustomEnvironment>(contract);
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(seller);
+
+            let mut market = MarketOrderbook::new(0);
+            assert_eq!(market.list_asset(asset_id, price), Ok(()));
+
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(buyer);
+            ink::env::test::set_callee::<market_standard::CustomEnvironment>(contract);
+            ink::env::test::transfer_in::<market_standard::CustomEnvironment>(price);
+            assert_eq!(market.buy_asset(asset_id), Ok(()));
+
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(seller);
+            assert_eq!(
+                market.list_asset(asset_id, price + 1),
+                Err(Error::AssetAlreadyListed)
+            );
+
+            let order = market
+                .orders
+                .get(asset_id)
+                .expect("settled asset order remains");
+            assert_eq!(order.status, OrderStatus::Settled);
+            assert_eq!(order.price, price);
+            assert_eq!(order.buyer, Some(buyer));
+        }
+
+        #[ink::test]
+        fn failed_asset_cancel_returns_error_without_panic_or_removal() {
+            let accounts = ink::env::test::default_accounts::<market_standard::CustomEnvironment>();
+            ink::env::test::register_chain_extension(FailingTransferExtension);
+
+            let contract = accounts.alice;
+            let seller = accounts.bob;
+            let asset_id = [20u8; 32];
+            let price = 100;
+
+            ink::env::test::set_callee::<market_standard::CustomEnvironment>(contract);
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(seller);
+
+            let mut market = MarketOrderbook::new(0);
+            assert_eq!(market.list_asset(asset_id, price), Ok(()));
+
+            assert_eq!(
+                market.cancel_asset_order(asset_id),
+                Err(Error::ChainExtension(DataAssetsExtError::TransferFailed))
+            );
+
+            let order = market.orders.get(asset_id).expect("asset order remains");
+            assert_eq!(order.status, OrderStatus::Listed);
+        }
+
+        #[ink::test]
+        fn asset_cancel_by_non_seller_returns_error_without_status_change() {
+            let accounts = ink::env::test::default_accounts::<market_standard::CustomEnvironment>();
+            let seller = accounts.bob;
+            let other = accounts.charlie;
+            let asset_id = [21u8; 32];
+            let price = 100;
+
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(seller);
+
+            let mut market = MarketOrderbook::new(0);
+            assert_eq!(market.list_asset(asset_id, price), Ok(()));
+
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(other);
+
+            assert_eq!(market.cancel_asset_order(asset_id), Err(Error::NotOwner));
+
+            let order = market.orders.get(asset_id).expect("asset order remains");
+            assert_eq!(order.status, OrderStatus::Listed);
+        }
+
+        #[ink::test]
+        fn successful_asset_cancel_marks_order_cancelled() {
+            let accounts = ink::env::test::default_accounts::<market_standard::CustomEnvironment>();
+            RECORDED_ASSET_TRANSFER.with(|recorded| *recorded.borrow_mut() = None);
+            ink::env::test::register_chain_extension(RecordingTransferExtension);
+
+            let contract = accounts.alice;
+            let seller = accounts.bob;
+            let asset_id = [22u8; 32];
+            let price = 100;
+
+            ink::env::test::set_callee::<market_standard::CustomEnvironment>(contract);
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(seller);
+
+            let mut market = MarketOrderbook::new(0);
+            assert_eq!(market.list_asset(asset_id, price), Ok(()));
+
+            assert_eq!(market.cancel_asset_order(asset_id), Ok(()));
+
+            RECORDED_ASSET_TRANSFER.with(|recorded| {
+                assert_eq!(
+                    *recorded.borrow(),
+                    Some((
+                        market_standard::TRANSFER_ASSET_FUNC_ID as u16,
+                        asset_id,
+                        seller
+                    ))
+                );
+            });
+
+            let order = market
+                .orders
+                .get(asset_id)
+                .expect("cancelled asset order remains");
+            assert_eq!(order.status, OrderStatus::Cancelled);
+            assert_eq!(order.buyer, None);
+            assert!(order.settled_at.is_none());
+        }
+
+        #[ink::test]
+        fn successful_certificate_cancel_marks_order_cancelled() {
+            let accounts = ink::env::test::default_accounts::<market_standard::CustomEnvironment>();
+            RECORDED_CERTIFICATE_TRANSFER.with(|recorded| *recorded.borrow_mut() = None);
+            ink::env::test::register_chain_extension(RecordingTransferExtension);
+
+            let contract = accounts.alice;
+            let seller = accounts.bob;
+            let asset_id = [23u8; 32];
+            let certificate_id = [24u8; 32];
+            let price = 100;
+
+            ink::env::test::set_callee::<market_standard::CustomEnvironment>(contract);
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(seller);
+
+            let mut market = MarketOrderbook::new(0);
+            assert_eq!(
+                market.list_certificate(asset_id, certificate_id, price),
+                Ok(())
+            );
+
+            assert_eq!(
+                market.cancel_certificate_order(asset_id, certificate_id),
+                Ok(())
+            );
+
+            RECORDED_CERTIFICATE_TRANSFER.with(|recorded| {
+                assert_eq!(
+                    *recorded.borrow(),
+                    Some((
+                        market_standard::TRANSFER_CERT_FUNC_ID as u16,
+                        asset_id,
+                        certificate_id,
+                        seller
+                    ))
+                );
+            });
+
+            let order = market
+                .certificate_orders
+                .get((asset_id, certificate_id))
+                .expect("cancelled certificate order remains");
+            assert_eq!(order.status, OrderStatus::Cancelled);
+            assert_eq!(order.buyer, None);
+            assert!(order.settled_at.is_none());
+        }
+
+        #[ink::test]
+        fn failed_certificate_cancel_returns_error_without_status_change() {
+            let accounts = ink::env::test::default_accounts::<market_standard::CustomEnvironment>();
+            ink::env::test::register_chain_extension(FailingTransferExtension);
+
+            let contract = accounts.alice;
+            let seller = accounts.bob;
+            let asset_id = [25u8; 32];
+            let certificate_id = [26u8; 32];
+            let price = 100;
+
+            ink::env::test::set_callee::<market_standard::CustomEnvironment>(contract);
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(seller);
+
+            let mut market = MarketOrderbook::new(0);
+            assert_eq!(
+                market.list_certificate(asset_id, certificate_id, price),
+                Ok(())
+            );
+
+            assert_eq!(
+                market.cancel_certificate_order(asset_id, certificate_id),
+                Err(Error::ChainExtension(DataAssetsExtError::TransferFailed))
+            );
+
+            let order = market
+                .certificate_orders
+                .get((asset_id, certificate_id))
+                .expect("certificate order remains");
+            assert_eq!(order.status, OrderStatus::Listed);
         }
     }
 }

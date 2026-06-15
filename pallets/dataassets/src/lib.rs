@@ -423,39 +423,7 @@ pub mod pallet {
                 Self::asset_approvals(&asset_id).map_or(false, |operator| operator == who);
 
             ensure!(is_owner || is_approved, Error::<T>::NotAuthorized);
-            ensure!(asset.is_active(), Error::<T>::AssetNotActive);
-
-            // 转换 u8 到 RightType
-            let right_type_enum = match right_type {
-                1 => RightType::Usage,
-                2 => RightType::Access,
-                _ => return Err(Error::<T>::InvalidRightType.into()),
-            };
-
-            let token_id = Self::get_next_certificate_id(&asset_id);
-            let current_time = Self::current_timestamp();
-
-            // 使用 minimal 构造函数，没有修改issuer，市场只是代理（issuer是否应该为市场，owner为授权者）
-            let certificate = RightToken::minimal(
-                token_id,
-                right_type_enum,
-                holder.clone(),           // 权证的购买者
-                asset.core.owner.clone(), // 元证持有者作为权证的发行者
-                asset_id,
-                current_time,
-                valid_until,
-            );
-            // certificate.token_id = RightToken::generate_token_id(asset.token_id, certificate_id);
-
-            Self::insert_certificate(&asset_id, &certificate)?;
-            T::IncentiveHandler::register_asset_trade(&asset_id);
-
-            Self::deposit_event(Event::CertificateIssued {
-                asset_id,
-                certificate_id: certificate.certificate_id,
-                issuer: asset.core.owner.clone(),
-                holder,
-            });
+            Self::issue_certificate_internal(&asset_id, &asset, &holder, right_type, valid_until)?;
             Ok(())
         }
 
@@ -1021,6 +989,68 @@ pub mod pallet {
             });
 
             Ok(())
+        }
+
+        pub fn issue_certificate_by_market_internal(
+            asset_id: &[u8; 32],
+            market_account: &T::AccountId,
+            issuer: &T::AccountId,
+            holder: &T::AccountId,
+            right_type: u8,
+            valid_until: Option<u64>,
+        ) -> Result<[u8; 32], DispatchError> {
+            let asset = Self::get_asset(asset_id).ok_or(Error::<T>::AssetNotFound)?;
+
+            let approved_account =
+                Self::asset_approvals(asset_id).ok_or(Error::<T>::NotAuthorized)?;
+            ensure!(
+                approved_account == *market_account,
+                Error::<T>::NotAuthorized
+            );
+            ensure!(asset.core.owner == *issuer, Error::<T>::NotOwner);
+
+            Self::issue_certificate_internal(asset_id, &asset, holder, right_type, valid_until)
+        }
+
+        fn issue_certificate_internal(
+            asset_id: &[u8; 32],
+            asset: &DataAsset<T::AccountId>,
+            holder: &T::AccountId,
+            right_type: u8,
+            valid_until: Option<u64>,
+        ) -> Result<[u8; 32], DispatchError> {
+            ensure!(asset.is_active(), Error::<T>::AssetNotActive);
+
+            let right_type_enum = match right_type {
+                1 => RightType::Usage,
+                2 => RightType::Access,
+                _ => return Err(Error::<T>::InvalidRightType.into()),
+            };
+
+            let token_id = Self::get_next_certificate_id(asset_id);
+            let current_time = Self::current_timestamp();
+            let certificate = RightToken::minimal(
+                token_id,
+                right_type_enum,
+                holder.clone(),
+                asset.core.owner.clone(),
+                *asset_id,
+                current_time,
+                valid_until,
+            );
+            let certificate_id = certificate.certificate_id;
+
+            Self::insert_certificate(asset_id, &certificate)?;
+            T::IncentiveHandler::register_asset_trade(asset_id);
+
+            Self::deposit_event(Event::CertificateIssued {
+                asset_id: *asset_id,
+                certificate_id,
+                issuer: asset.core.owner.clone(),
+                holder: holder.clone(),
+            });
+
+            Ok(certificate_id)
         }
 
         pub fn transfer_certificate_internal(

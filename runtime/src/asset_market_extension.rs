@@ -11,6 +11,7 @@ use sp_runtime::DispatchError;
 // 定义 Function IDs
 const TRANSFER_ASSET_FUNC_ID: u16 = 1;
 const TRANSFER_CERT_FUNC_ID: u16 = 2; // 新增：转移权证
+const ISSUE_CERT_FUNC_ID: u16 = 3; // 新增：发行权证
 const TRANSFER_FAILED_STATUS: u32 = 1;
 const ASSET_NOT_FOUND_STATUS: u32 = 2;
 const PERMISSION_DENIED_STATUS: u32 = 3;
@@ -99,6 +100,30 @@ where
                     Err(error) => Ok(RetVal::Converging(dataassets_error_status::<T>(error))),
                 }
             }
+            ISSUE_CERT_FUNC_ID => {
+                log::debug!(target: "runtime", "DataAssetsExtension: Calling ISSUE_CERT_FUNC_ID");
+                let mut env = env.buf_in_buf_out();
+                let (asset_id, issuer, holder, right_type, valid_until): (
+                    [u8; 32],
+                    T::AccountId,
+                    T::AccountId,
+                    u8,
+                    Option<u64>,
+                ) = env.read_as()?;
+                let caller_account = env.ext().address().clone();
+
+                match pallet_dataassets::Pallet::<T>::issue_certificate_by_market_internal(
+                    &asset_id,
+                    &caller_account,
+                    &issuer,
+                    &holder,
+                    right_type,
+                    valid_until,
+                ) {
+                    Ok(_) => Ok(RetVal::Converging(0)),
+                    Err(error) => Ok(RetVal::Converging(dataassets_error_status::<T>(error))),
+                }
+            }
             _ => Err(DispatchError::Other("Unregistered function")),
         }
     }
@@ -114,5 +139,12 @@ mod tests {
         assert_ne!(CERTIFICATE_NOT_ACTIVE_STATUS, 0);
         assert_ne!(TRANSFER_FAILED_STATUS, CERTIFICATE_NOT_FOUND_STATUS);
         assert_ne!(CERTIFICATE_NOT_FOUND_STATUS, CERTIFICATE_NOT_ACTIVE_STATUS);
+    }
+
+    #[test]
+    fn issue_certificate_function_id_is_3() {
+        assert_eq!(ISSUE_CERT_FUNC_ID, 3);
+        assert_ne!(ISSUE_CERT_FUNC_ID, TRANSFER_ASSET_FUNC_ID);
+        assert_ne!(ISSUE_CERT_FUNC_ID, TRANSFER_CERT_FUNC_ID);
     }
 }

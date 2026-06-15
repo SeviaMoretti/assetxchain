@@ -233,6 +233,87 @@ fn issue_certificate_registers_certificate_trade_measurement() {
 }
 
 #[test]
+fn authorized_market_can_issue_certificate_to_buyer() {
+    new_test_ext().execute_with(|| {
+        let owner: AccountId = 1;
+        let market: AccountId = 2;
+        let buyer: AccountId = 3;
+        let (asset_id, _) = register_test_asset(owner);
+
+        assert_ok!(DataAssets::authorize_market(
+            RuntimeOrigin::signed(owner),
+            asset_id,
+            market,
+        ));
+
+        let cert_id = DataAssets::issue_certificate_by_market_internal(
+            &asset_id, &market, &owner, &buyer, 1, None,
+        )
+        .expect("authorized market issues certificate");
+
+        let cert = DataAssets::get_certificate(&asset_id, &cert_id).unwrap();
+        assert_eq!(cert.owner, buyer);
+        assert_eq!(cert.issuer, owner);
+        assert_eq!(cert.parent_asset_id, asset_id);
+        assert_eq!(trade_measurements(), vec![asset_id]);
+    });
+}
+
+#[test]
+fn unauthorized_market_cannot_issue_certificate() {
+    new_test_ext().execute_with(|| {
+        let owner: AccountId = 1;
+        let market: AccountId = 2;
+        let buyer: AccountId = 3;
+        let (asset_id, _) = register_test_asset(owner);
+
+        assert_noop!(
+            DataAssets::issue_certificate_by_market_internal(
+                &asset_id, &market, &owner, &buyer, 1, None,
+            ),
+            pallet_dataassets::Error::<Test>::NotAuthorized,
+        );
+
+        let cert_id = certificate_id(&asset_id, owner, 0);
+        assert!(DataAssets::get_certificate(&asset_id, &cert_id).is_none());
+        assert!(trade_measurements().is_empty());
+    });
+}
+
+#[test]
+fn authorized_market_cannot_issue_certificate_for_non_owner_seller() {
+    new_test_ext().execute_with(|| {
+        let owner: AccountId = 1;
+        let market: AccountId = 2;
+        let buyer: AccountId = 3;
+        let fake_seller: AccountId = 4;
+        let (asset_id, _) = register_test_asset(owner);
+
+        assert_ok!(DataAssets::authorize_market(
+            RuntimeOrigin::signed(owner),
+            asset_id,
+            market,
+        ));
+
+        assert_noop!(
+            DataAssets::issue_certificate_by_market_internal(
+                &asset_id,
+                &market,
+                &fake_seller,
+                &buyer,
+                1,
+                None,
+            ),
+            pallet_dataassets::Error::<Test>::NotOwner,
+        );
+
+        let cert_id = certificate_id(&asset_id, owner, 0);
+        assert!(DataAssets::get_certificate(&asset_id, &cert_id).is_none());
+        assert!(trade_measurements().is_empty());
+    });
+}
+
+#[test]
 fn transfer_certificate_updates_owner_nonce_and_registers_trade_measurement() {
     new_test_ext().execute_with(|| {
         let (asset_id, _) = register_test_asset(1);

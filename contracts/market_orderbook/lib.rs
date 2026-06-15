@@ -47,6 +47,7 @@ mod market_orderbook {
         pub asset_id: [u8; 32],
         pub certificate_id: [u8; 32],
         pub right_type: u8,
+        pub valid_until: Option<u64>,
         pub status: OrderStatus,
         pub created_at: BlockNumber,
         pub settled_at: Option<BlockNumber>,
@@ -168,6 +169,7 @@ mod market_orderbook {
                 asset_id,
                 certificate_id: [0u8; 32],
                 right_type: 0,
+                valid_until: None,
                 status: OrderStatus::Listed,
                 created_at: self.env().block_number(),
                 settled_at: None,
@@ -263,6 +265,7 @@ mod market_orderbook {
                 asset_id,
                 certificate_id,
                 right_type: 0,
+                valid_until: None,
                 status: OrderStatus::Listed,
                 created_at: self.env().block_number(),
                 settled_at: None,
@@ -274,6 +277,99 @@ mod market_orderbook {
                 certificate_id,
                 seller,
                 price,
+            });
+
+            Ok(())
+        }
+
+        /// 上架发行型权证订单。购买时由市场合约触发 Runtime 直接给买方发行权证。
+        #[ink(message)]
+        pub fn list_certificate_issue(
+            &mut self,
+            asset_id: [u8; 32],
+            right_type: u8,
+            valid_until: Option<u64>,
+            price: Balance,
+        ) -> Result<(), Error> {
+            if self.orders.contains(asset_id) {
+                return Err(Error::AssetAlreadyListed);
+            }
+
+            let seller = self.env().caller();
+            let order = Order {
+                seller,
+                buyer: None,
+                price,
+                asset_type: AssetType::Certificate,
+                asset_id,
+                certificate_id: [0u8; 32],
+                right_type,
+                valid_until,
+                status: OrderStatus::Listed,
+                created_at: self.env().block_number(),
+                settled_at: None,
+            };
+            self.orders.insert(asset_id, &order);
+
+            self.env().emit_event(CertificateListed {
+                asset_id,
+                certificate_id: [0u8; 32],
+                seller,
+                price,
+            });
+
+            Ok(())
+        }
+
+        /// 购买发行型权证，Runtime 在结算时直接为买方发行权证。
+        #[ink(message, payable)]
+        pub fn buy_certificate_issue(&mut self, asset_id: [u8; 32]) -> Result<(), Error> {
+            let mut order = self.orders.get(asset_id).ok_or(Error::AssetNotFound)?;
+            let buyer = self.env().caller();
+            let transferred_val = self.env().transferred_value();
+
+            if order.status != OrderStatus::Listed || order.asset_type != AssetType::Certificate {
+                return Err(Error::InvalidOrderStatus);
+            }
+
+            if transferred_val < order.price {
+                return Err(Error::InsufficientPayment);
+            }
+
+            order.status = OrderStatus::Locked;
+            order.buyer = Some(buyer);
+            self.orders.insert(asset_id, &order);
+
+            if let Err(e) = self.env().extension().issue_certificate(
+                asset_id,
+                order.seller,
+                buyer,
+                order.right_type,
+                order.valid_until,
+            ) {
+                order.status = OrderStatus::Failed;
+                order.settled_at = None;
+                self.orders.insert(asset_id, &order);
+                return Err(Error::ChainExtension(e));
+            }
+
+            if self.env().transfer(order.seller, order.price).is_err() {
+                order.status = OrderStatus::Failed;
+                order.settled_at = None;
+                self.orders.insert(asset_id, &order);
+                return Err(Error::TransferFailed);
+            }
+
+            order.status = OrderStatus::Settled;
+            order.settled_at = Some(self.env().block_number());
+            self.orders.insert(asset_id, &order);
+            self.report_trade_result([3u8; 32], true);
+
+            self.env().emit_event(CertificateSold {
+                asset_id,
+                certificate_id: [0u8; 32],
+                buyer,
+                price: order.price,
             });
 
             Ok(())
@@ -459,6 +555,9 @@ mod market_orderbook {
                 RefCell::new(None);
             static RECORDED_CERTIFICATE_TRANSFER: RefCell<Option<(u16, [u8; 32], [u8; 32], AccountId)>> =
                 RefCell::new(None);
+            static RECORDED_CERTIFICATE_ISSUE: RefCell<
+                Option<(u16, [u8; 32], AccountId, AccountId, u8, Option<u64>)>,
+            > = RefCell::new(None);
         }
 
         struct FailingTransferExtension;
@@ -472,6 +571,7 @@ mod market_orderbook {
                 assert!(
                     func_id == market_standard::TRANSFER_ASSET_FUNC_ID as u16
                         || func_id == market_standard::TRANSFER_CERT_FUNC_ID as u16
+                        || func_id == market_standard::ISSUE_CERT_FUNC_ID as u16
                 );
                 DataAssetsExtError::TransferFailed as u32
             }
@@ -498,6 +598,16 @@ mod market_orderbook {
                             .expect("valid certificate transfer input");
                     RECORDED_CERTIFICATE_TRANSFER.with(|recorded| {
                         *recorded.borrow_mut() = Some((func_id, asset_id, certificate_id, buyer));
+                    });
+                } else if func_id == market_standard::ISSUE_CERT_FUNC_ID as u16 {
+                    let (asset_id, issuer, buyer, right_type, valid_until) =
+                        <([u8; 32], AccountId, AccountId, u8, Option<u64>)>::decode(
+                            &mut &payload[..],
+                        )
+                        .expect("valid certificate issue input");
+                    RECORDED_CERTIFICATE_ISSUE.with(|recorded| {
+                        *recorded.borrow_mut() =
+                            Some((func_id, asset_id, issuer, buyer, right_type, valid_until));
                     });
                 } else {
                     panic!("unexpected function id {func_id}");
@@ -707,6 +817,7 @@ mod market_orderbook {
             assert_eq!(order.asset_id, asset_id);
             assert_eq!(order.certificate_id, [0u8; 32]);
             assert_eq!(order.right_type, 0);
+            assert_eq!(order.valid_until, None);
             assert_eq!(order.status, OrderStatus::Listed);
             assert_eq!(order.settled_at, None);
         }
@@ -737,8 +848,37 @@ mod market_orderbook {
             assert_eq!(order.asset_type, AssetType::Certificate);
             assert_eq!(order.asset_id, asset_id);
             assert_eq!(order.certificate_id, certificate_id);
+            assert_eq!(order.valid_until, None);
             assert_eq!(order.status, OrderStatus::Listed);
             assert_eq!(order.settled_at, None);
+        }
+
+        #[ink::test]
+        fn listed_certificate_issue_order_records_right_terms() {
+            let accounts = ink::env::test::default_accounts::<market_standard::CustomEnvironment>();
+            let seller = accounts.bob;
+            let asset_id = [29u8; 32];
+            let price = 100;
+            let right_type = 2;
+            let valid_until = Some(1_000u64);
+
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(seller);
+
+            let mut market = MarketOrderbook::new(0);
+            assert_eq!(
+                market.list_certificate_issue(asset_id, right_type, valid_until, price),
+                Ok(())
+            );
+
+            let order = market.orders.get(asset_id).expect("issue order exists");
+            assert_eq!(order.seller, seller);
+            assert_eq!(order.buyer, None);
+            assert_eq!(order.asset_type, AssetType::Certificate);
+            assert_eq!(order.asset_id, asset_id);
+            assert_eq!(order.certificate_id, [0u8; 32]);
+            assert_eq!(order.right_type, right_type);
+            assert_eq!(order.valid_until, valid_until);
+            assert_eq!(order.status, OrderStatus::Listed);
         }
 
         #[ink::test]
@@ -859,6 +999,132 @@ mod market_orderbook {
             assert_eq!(order.buyer, Some(buyer));
             assert_eq!(order.status, OrderStatus::Settled);
             assert!(order.settled_at.is_some());
+        }
+
+        #[ink::test]
+        fn buy_certificate_issue_calls_issue_extension_with_buyer_and_right_terms() {
+            let accounts = ink::env::test::default_accounts::<market_standard::CustomEnvironment>();
+            RECORDED_CERTIFICATE_ISSUE.with(|recorded| *recorded.borrow_mut() = None);
+            ink::env::test::register_chain_extension(RecordingTransferExtension);
+
+            let contract = accounts.alice;
+            let seller = accounts.bob;
+            let buyer = accounts.charlie;
+            let asset_id = [30u8; 32];
+            let price = 100;
+            let right_type = 1;
+            let valid_until = Some(2_000u64);
+
+            ink::env::test::set_callee::<market_standard::CustomEnvironment>(contract);
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(seller);
+
+            let mut market = MarketOrderbook::new(0);
+            assert_eq!(
+                market.list_certificate_issue(asset_id, right_type, valid_until, price),
+                Ok(())
+            );
+
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(buyer);
+            ink::env::test::set_callee::<market_standard::CustomEnvironment>(contract);
+            ink::env::test::transfer_in::<market_standard::CustomEnvironment>(price);
+
+            assert_eq!(market.buy_certificate_issue(asset_id), Ok(()));
+
+            RECORDED_CERTIFICATE_ISSUE.with(|recorded| {
+                assert_eq!(
+                    *recorded.borrow(),
+                    Some((
+                        market_standard::ISSUE_CERT_FUNC_ID as u16,
+                        asset_id,
+                        seller,
+                        buyer,
+                        right_type,
+                        valid_until
+                    ))
+                );
+            });
+
+            let order = market
+                .orders
+                .get(asset_id)
+                .expect("settled issue order remains");
+            assert_eq!(order.buyer, Some(buyer));
+            assert_eq!(order.status, OrderStatus::Settled);
+            assert!(order.settled_at.is_some());
+        }
+
+        #[ink::test]
+        fn insufficient_payment_leaves_certificate_issue_order_listed() {
+            let accounts = ink::env::test::default_accounts::<market_standard::CustomEnvironment>();
+            let seller = accounts.bob;
+            let buyer = accounts.charlie;
+            let asset_id = [31u8; 32];
+            let price = 100;
+
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(seller);
+
+            let mut market = MarketOrderbook::new(0);
+            assert_eq!(
+                market.list_certificate_issue(asset_id, 1, None, price),
+                Ok(())
+            );
+
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(buyer);
+            ink::env::test::transfer_in::<market_standard::CustomEnvironment>(price - 1);
+
+            assert_eq!(
+                market.buy_certificate_issue(asset_id),
+                Err(Error::InsufficientPayment)
+            );
+
+            let order = market.orders.get(asset_id).expect("issue order remains");
+            assert_eq!(order.buyer, None);
+            assert_eq!(order.status, OrderStatus::Listed);
+            assert_eq!(order.settled_at, None);
+        }
+
+        #[ink::test]
+        fn failed_certificate_issue_marks_order_failed_without_payment() {
+            let accounts = ink::env::test::default_accounts::<market_standard::CustomEnvironment>();
+            ink::env::test::register_chain_extension(FailingTransferExtension);
+
+            let contract = accounts.alice;
+            let seller = accounts.bob;
+            let buyer = accounts.charlie;
+            let asset_id = [32u8; 32];
+            let price = 100;
+
+            ink::env::test::set_callee::<market_standard::CustomEnvironment>(contract);
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(seller);
+
+            let mut market = MarketOrderbook::new(0);
+            assert_eq!(
+                market.list_certificate_issue(asset_id, 1, None, price),
+                Ok(())
+            );
+
+            let seller_balance_before =
+                ink::env::test::get_account_balance::<market_standard::CustomEnvironment>(seller)
+                    .unwrap();
+
+            ink::env::test::set_caller::<market_standard::CustomEnvironment>(buyer);
+            ink::env::test::set_callee::<market_standard::CustomEnvironment>(contract);
+            ink::env::test::transfer_in::<market_standard::CustomEnvironment>(price);
+
+            assert_eq!(
+                market.buy_certificate_issue(asset_id),
+                Err(Error::ChainExtension(DataAssetsExtError::TransferFailed))
+            );
+
+            let seller_balance_after =
+                ink::env::test::get_account_balance::<market_standard::CustomEnvironment>(seller)
+                    .unwrap();
+            assert_eq!(seller_balance_after, seller_balance_before);
+
+            let order = market.orders.get(asset_id).expect("issue order remains");
+            assert_eq!(order.buyer, Some(buyer));
+            assert_eq!(order.status, OrderStatus::Failed);
+            assert_eq!(order.settled_at, None);
         }
 
         #[ink::test]

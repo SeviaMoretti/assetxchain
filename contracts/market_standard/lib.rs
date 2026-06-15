@@ -9,7 +9,8 @@ use scale_info::TypeInfo;
 pub const DATA_ASSETS_EXT_ID: u32 = 1;
 pub const TRANSFER_ASSET_FUNC_ID: u32 = 1; // 方法ID
 pub const TRANSFER_CERT_FUNC_ID: u32 = 2; // 权证转移方法ID
-                                          // 链扩展错误码
+pub const ISSUE_CERT_FUNC_ID: u32 = 3; // 权证发行方法ID
+                                       // 链扩展错误码
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Encode, Decode, TypeInfo)]
 #[cfg_attr(feature = "std", derive(serde::Serialize, serde::Deserialize))]
 pub enum DataAssetsExtError {
@@ -59,6 +60,17 @@ pub trait DataAssetsExt {
         asset_id: [u8; 32],
         certificate_id: [u8; 32],
         to: AccountId,
+    ) -> Result<(), DataAssetsExtError>;
+
+    /// 发行权证
+    /// 对应 Runtime 中的 func_id = 3
+    #[ink(function = 3)]
+    fn issue_certificate(
+        asset_id: [u8; 32],
+        issuer: AccountId,
+        holder: AccountId,
+        right_type: u8,
+        valid_until: Option<u64>,
     ) -> Result<(), DataAssetsExtError>;
 }
 
@@ -181,6 +193,32 @@ mod tests {
             assert_eq!(
                 *call.borrow(),
                 Some((TRANSFER_CERT_FUNC_ID as u16, expected_input))
+            );
+        });
+    }
+
+    #[ink::test]
+    fn issue_certificate_extension_uses_function_id_3_and_expected_input() {
+        CERTIFICATE_TRANSFER_CALL.with(|call| *call.borrow_mut() = None);
+        test::register_chain_extension(RecordingCertificateTransferExtension);
+
+        let accounts = test::default_accounts::<CustomEnvironment>();
+        let asset_id = [9u8; 32];
+        let right_type = 1u8;
+        let valid_until = Some(123_456u64);
+
+        ink::EnvAccess::<CustomEnvironment>::default()
+            .extension()
+            .issue_certificate(asset_id, accounts.alice, accounts.bob, right_type, valid_until)
+            .expect("certificate issue succeeds");
+
+        let expected_payload =
+            (asset_id, accounts.alice, accounts.bob, right_type, valid_until).encode();
+        let expected_input = expected_payload.encode();
+        CERTIFICATE_TRANSFER_CALL.with(|call| {
+            assert_eq!(
+                *call.borrow(),
+                Some((ISSUE_CERT_FUNC_ID as u16, expected_input))
             );
         });
     }

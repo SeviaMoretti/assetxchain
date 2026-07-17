@@ -10,7 +10,7 @@ use frame_support::{
 	traits::{Currency, Get, ReservableCurrency},
 };
 use frame_system::pallet_prelude::BlockNumberFor;
-use sp_runtime::traits::{Bounded, StaticLookup, SaturatedConversion};
+use sp_runtime::traits::{Bounded, StaticLookup, SaturatedConversion, Saturating};
 use sp_std::vec;
 use sp_std::vec::Vec;
 
@@ -30,6 +30,11 @@ benchmarks! {
 		// 准备资金
         let total_funding = <<T as pallet::Config>::Currency as Currency<T::AccountId>>::minimum_balance() * 1000000u32.into();
         <<T as pallet::Config>::Currency as Currency<T::AccountId>>::make_free_balance_be(&caller, total_funding);
+
+        let collateral_funding =
+            <T as pallet_collaterals::Config>::MinMarketOperatorCollateral::get()
+                .saturating_mul(2u32.into());
+        <<T as pallet_collaterals::Config>::Currency as Currency<T::AccountId>>::make_free_balance_be(&caller, collateral_funding);
 
         // 上传代码
         let wasm = REAL_MARKET_WASM.to_vec();

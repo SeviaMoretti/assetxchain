@@ -1,5 +1,5 @@
 use crate as pallet_dataassets;
-use crate::types::{DataAsset, RightToken, TradeAssetType};
+use crate::types::{DataAsset, MarketOrder, MarketOrderStatus, RightToken, TradeAssetType};
 use frame_support::{
     assert_noop, assert_ok, construct_runtime, derive_impl, parameter_types,
     traits::{ConstU128, ConstU32},
@@ -201,6 +201,49 @@ fn trade_settled_event_count() -> usize {
         .count()
 }
 
+type TestBalance = Balance;
+type TestBlockNumber = u64;
+
+fn insert_market_order(order_id: [u8; 32], seller: AccountId, object_type: TradeAssetType, object_id: [u8; 32]) {
+    let order = MarketOrder::<AccountId, TestBalance, TestBlockNumber> {
+        order_id,
+        order_digest: order_id, // 测试中用 order_id 本身作为 digest
+        market: 3,   // 约定市场 = 3
+        seller,
+        buyer: None,
+        object_type,
+        object_id,
+        parent_asset_id: None,
+        price: 0,
+        status: MarketOrderStatus::Open,
+        created_at: System::block_number(),
+    };
+    pallet_dataassets::MarketOrders::<Test>::insert(order_id, order);
+}
+
+fn insert_market_order_with_parent(
+    order_id: [u8; 32],
+    seller: AccountId,
+    object_type: TradeAssetType,
+    object_id: [u8; 32],
+    parent_asset_id: [u8; 32],
+) {
+    let order = MarketOrder::<AccountId, TestBalance, TestBlockNumber> {
+        order_id,
+        order_digest: order_id,
+        market: 3,
+        seller,
+        buyer: None,
+        object_type,
+        object_id,
+        parent_asset_id: Some(parent_asset_id),
+        price: 0,
+        status: MarketOrderStatus::Open,
+        created_at: System::block_number(),
+    };
+    pallet_dataassets::MarketOrders::<Test>::insert(order_id, order);
+}
+
 #[test]
 fn register_asset_core_creates_asset_without_collateral_or_incentive() {
     new_test_ext().execute_with(|| {
@@ -285,8 +328,11 @@ fn market_asset_settlement_records_trade_evidence() {
             market,
         ));
 
+        let order_id = [1u8; 32];
+        insert_market_order(order_id, owner, TradeAssetType::DataAsset, asset_id);
+
         let trade_id =
-            DataAssets::settle_asset_trade_by_market_internal(&asset_id, &market, &buyer, price)
+            DataAssets::settle_asset_trade_by_market_internal(&asset_id, &market, &buyer, price, &order_id, &order_id)
                 .expect("authorized market settles asset trade");
 
         let asset = DataAssets::get_asset(&asset_id).unwrap();
@@ -336,9 +382,16 @@ fn failed_market_asset_settlement_does_not_record_trade_evidence() {
         let price: Balance = 250;
         let (asset_id, _) = register_test_asset(owner);
 
-        assert_noop!(
-            DataAssets::settle_asset_trade_by_market_internal(&asset_id, &market, &buyer, price),
-            pallet_dataassets::Error::<Test>::NotAuthorized,
+        let order_id = [2u8; 32];
+        insert_market_order(order_id, owner, TradeAssetType::DataAsset, asset_id);
+        // verify_settle_prerequisites 会在失败时 emit SettlementRejected 事件，
+        // 因此不能用 assert_noop!（它要求存储完全不变）
+        assert_eq!(
+            DataAssets::settle_asset_trade_by_market_internal(
+                &asset_id, &market, &buyer, price, &order_id, &order_id,
+            )
+            .unwrap_err(),
+            pallet_dataassets::Error::<Test>::NotAuthorized.into(),
         );
 
         let asset = DataAssets::get_asset(&asset_id).unwrap();
@@ -365,8 +418,17 @@ fn market_certificate_settlement_records_trade_evidence() {
         ));
         let cert_id = certificate_id(&asset_id, owner, 0);
 
+        let order_id = [3u8; 32];
+        // 权证结算需要父资产的授权 + MarketOrder 投影（含 parent_asset_id）
+        assert_ok!(DataAssets::authorize_market(
+            RuntimeOrigin::signed(owner),
+            asset_id,
+            market,
+        ));
+        insert_market_order_with_parent(order_id, market, TradeAssetType::Certificate, cert_id, asset_id);
+
         let trade_id = DataAssets::settle_certificate_trade_internal(
-            &asset_id, &cert_id, &market, &buyer, price,
+            &asset_id, &cert_id, &market, &buyer, price, &order_id, &order_id,
         )
         .expect("certificate holder market settles certificate trade");
 
@@ -419,15 +481,29 @@ fn failed_market_certificate_settlement_does_not_record_trade_evidence() {
         let (asset_id, _) = register_test_asset(owner);
         let missing_cert_id = [9u8; 32];
 
-        assert_noop!(
+        let order_id = [4u8; 32];
+        // 即使权证不存在，也需要 MarketOrder 投影（verify_settle_prerequisites 先查订单）
+        // 这里用 asset_id 作为 parent_asset_id 来避免 AssetNotFound，让验证走到 Certificate 分支
+        assert_ok!(DataAssets::authorize_market(
+            RuntimeOrigin::signed(owner),
+            asset_id,
+            market,
+        ));
+        insert_market_order_with_parent(order_id, market, TradeAssetType::Certificate, missing_cert_id, asset_id);
+
+        // verify_settle_prerequisites 失败时 emit SettlementRejected，不能用 assert_noop!
+        assert_eq!(
             DataAssets::settle_certificate_trade_internal(
                 &asset_id,
                 &missing_cert_id,
                 &market,
                 &buyer,
                 price,
-            ),
-            pallet_dataassets::Error::<Test>::CertificateNotFound,
+                &order_id,
+                &order_id,
+            )
+            .unwrap_err(),
+            pallet_dataassets::Error::<Test>::CertificateNotFound.into(),
         );
 
         assert_eq!(trade_settled_event_count(), 0);

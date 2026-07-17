@@ -170,6 +170,44 @@ pub mod pallet {
     #[pallet::storage]
     pub type TradeSettlementNonce<T: Config> = StorageValue<_, u64, ValueQuery>;
 
+    /// 订单投影表——合约创建订单后通过 Chain Extension (func_id=6) 写入此存储。
+    /// 运行时结算时读取此投影进行前置验证（验证入口见 verify_settle_prerequisites）。
+    #[pallet::storage]
+    #[pallet::getter(fn market_orders)]
+    pub type MarketOrders<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        [u8; 32], // order_id
+        crate::types::MarketOrder<T::AccountId, BalanceOf<T>, BlockNumberFor<T>>,
+        OptionQuery,
+    >;
+
+    /// 结算记录表——以 order_id 为主键。
+    /// 每笔成功结算在此写入一条 SettlementRecord，与 TradeSettlements 双写。
+    #[pallet::storage]
+    #[pallet::getter(fn order_settlements)]
+    pub type OrderSettlements<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        [u8; 32], // order_id
+        crate::types::SettlementRecord<T::AccountId, BalanceOf<T>, BlockNumberFor<T>>,
+        OptionQuery,
+    >;
+
+    /// 每个资产的活跃权证数量。
+    /// issue_certificate 时 +1，revoke_certificate 时 −1。
+    /// 用于 transfer_asset 中阻止"有活跃权证时所有者直接转移资产"。
+    /// 使用 ValueQuery：缺失键默认返回 0。
+    #[pallet::storage]
+    #[pallet::getter(fn active_certificate_count)]
+    pub type ActiveCertificateCount<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        [u8; 32], // asset_id
+        u32,
+        ValueQuery,
+    >;
+
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
@@ -258,6 +296,11 @@ pub mod pallet {
             cert_count: u64,
             put_count: u64,
         },
+        /// 结算被拒绝事件——每个拒绝原因对应一个 reason 字符串
+        SettlementRejected {
+            order_id: [u8; 32],
+            reason: Vec<u8>,
+        },
     }
 
     #[pallet::error]
@@ -279,6 +322,12 @@ pub mod pallet {
         NotAuthorized,
         AlreadyAuthorized,
         CertificateNotActive,
+        OrderNotFound,
+        OrderStatusInvalid,
+        OrderDigestMismatch,
+        AlreadySettled,
+        OrderLockFailed,
+        OutstandingCertificates,
     }
 
     #[pallet::hooks]
@@ -468,6 +517,10 @@ pub mod pallet {
                 !AssetApprovals::<T>::contains_key(&asset_id),
                 Error::<T>::AlreadyAuthorized
             ); // 授权后的资产只有授权的市场可以交易
+            ensure!(
+                ActiveCertificateCount::<T>::get(&asset_id) == 0,
+                Error::<T>::OutstandingCertificates
+            ); // 有活跃权证的资产不能直接转移所有权
             let old_owner = asset.core.owner.clone();
             asset.core.owner = new_owner.clone();
             asset.core.nonce += 1;
@@ -506,6 +559,7 @@ pub mod pallet {
             );
 
             Self::remove_certificate(&asset_id, &certificate_id)?;
+            ActiveCertificateCount::<T>::mutate(&asset_id, |count| *count = count.saturating_sub(1));
 
             Self::deposit_event(Event::CertificateRevoked {
                 asset_id,
@@ -1001,13 +1055,17 @@ pub mod pallet {
             certificate_id: &[u8; 32],
             asset_type: TradeAssetType,
             price: BalanceOf<T>,
-        ) -> [u8; 32] {
+            order_id: &[u8; 32],
+            order_digest: &[u8; 32],
+            right_action: crate::types::RightAction,
+        ) -> Result<[u8; 32], DispatchError> {
             let settled_at = frame_system::Pallet::<T>::block_number();
             let nonce = Self::next_trade_settlement_nonce();
             let trade_id =
                 Self::generate_trade_id(market, buyer, asset_id, certificate_id, settled_at, nonce);
+            let state_root = Self::compute_asset_root();
 
-            let settlement = TradeSettlement {
+            let ts = TradeSettlement {
                 trade_id,
                 market: market.clone(),
                 seller: seller.clone(),
@@ -1018,8 +1076,32 @@ pub mod pallet {
                 price,
                 settled_at,
             };
+            TradeSettlements::<T>::insert(trade_id, ts);
 
-            TradeSettlements::<T>::insert(trade_id, settlement);
+            // 写入 OrderSettlements（论文要求的主索引，以 order_id 为键）
+            // Double-check: 使用 try_mutate 原子地检查并写入
+            let record = crate::types::SettlementRecord {
+                trade_id,
+                order_id: *order_id,
+                market: market.clone(),
+                seller: seller.clone(),
+                buyer: buyer.clone(),
+                asset_id: *asset_id,
+                certificate_id: *certificate_id,
+                object_type: asset_type,
+                right_action,
+                price,
+                order_digest: *order_digest,
+                settled_at,
+                state_root_at_settlement: state_root,
+            };
+            OrderSettlements::<T>::try_mutate(order_id, |existing| -> Result<(), DispatchError> {
+                ensure!(existing.is_none(), Error::<T>::AlreadySettled);
+                *existing = Some(record.clone());
+                Ok(())
+            })?;
+            // try_mutate 闭包返回 Err 则存储不变 — 这是 double-check 的原子性保证
+
             Self::deposit_event(Event::TradeSettled {
                 trade_id,
                 market: market.clone(),
@@ -1032,7 +1114,209 @@ pub mod pallet {
                 settled_at,
             });
 
-            trade_id
+            Ok(trade_id)
+        }
+
+        /// 统一的结算前置验证入口。
+        /// 按七条件合取范式顺序检查，任一条件不满足即返回 Err 并 emit SettlementRejected 事件。
+        /// 此函数是只读的——不修改任何存储。
+        fn verify_settle_prerequisites(
+            order_id: &[u8; 32],
+            order_digest: &[u8; 32],
+            market: &T::AccountId,
+            object_type: TradeAssetType,
+            object_id: &[u8; 32],
+        ) -> Result<crate::types::MarketOrder<T::AccountId, BalanceOf<T>, BlockNumberFor<T>>, DispatchError> {
+            // 条件 1: NoPriorSettlement — 检查 settlement:{order_id} 已存在则拒绝
+            if OrderSettlements::<T>::contains_key(order_id) {
+                Self::deposit_event(Event::SettlementRejected {
+                    order_id: *order_id,
+                    reason: b"AlreadySettled".to_vec(),
+                });
+                return Err(Error::<T>::AlreadySettled.into());
+            }
+
+            // 条件 2: OrderExists + OrderOpenOrLocked
+            let order = MarketOrders::<T>::get(order_id).ok_or({
+                Self::deposit_event(Event::SettlementRejected {
+                    order_id: *order_id,
+                    reason: b"OrderNotFound".to_vec(),
+                });
+                Error::<T>::OrderNotFound
+            })?;
+
+            if !matches!(order.status, crate::types::MarketOrderStatus::Open | crate::types::MarketOrderStatus::Locked) {
+                Self::deposit_event(Event::SettlementRejected {
+                    order_id: *order_id,
+                    reason: b"OrderStatusInvalid".to_vec(),
+                });
+                return Err(Error::<T>::OrderStatusInvalid.into());
+            }
+
+            // 条件 3: MatchOrderDigest
+            if order.order_digest != *order_digest {
+                Self::deposit_event(Event::SettlementRejected {
+                    order_id: *order_id,
+                    reason: b"OrderDigestMismatch".to_vec(),
+                });
+                return Err(Error::<T>::OrderDigestMismatch.into());
+            }
+
+            // 条件 4: MatchAuthorization — market 持有有效授权
+            match object_type {
+                TradeAssetType::DataAsset => {
+                    let approved = AssetApprovals::<T>::get(object_id)
+                        .ok_or({
+                            Self::deposit_event(Event::SettlementRejected {
+                                order_id: *order_id,
+                                reason: b"UnauthorizedMarket".to_vec(),
+                            });
+                            Error::<T>::NotAuthorized
+                        })?;
+                    ensure!(approved == *market, {
+                        Self::deposit_event(Event::SettlementRejected {
+                            order_id: *order_id,
+                            reason: b"UnauthorizedMarket".to_vec(),
+                        });
+                        Error::<T>::NotAuthorized
+                    });
+                }
+                TradeAssetType::Certificate => {
+                    let parent_asset = order.parent_asset_id.ok_or({
+                        Self::deposit_event(Event::SettlementRejected {
+                            order_id: *order_id,
+                            reason: b"AssetNotFound".to_vec(),
+                        });
+                        Error::<T>::AssetNotFound
+                    })?;
+                    let approved = AssetApprovals::<T>::get(&parent_asset)
+                        .ok_or({
+                            Self::deposit_event(Event::SettlementRejected {
+                                order_id: *order_id,
+                                reason: b"UnauthorizedMarket".to_vec(),
+                            });
+                            Error::<T>::NotAuthorized
+                        })?;
+                    ensure!(approved == *market, {
+                        Self::deposit_event(Event::SettlementRejected {
+                            order_id: *order_id,
+                            reason: b"UnauthorizedMarket".to_vec(),
+                        });
+                        Error::<T>::NotAuthorized
+                    });
+                }
+            }
+
+            // 条件 5: ObjectExists + MatchOwnership
+            match object_type {
+                TradeAssetType::DataAsset => {
+                    let asset = Self::get_asset(object_id).ok_or({
+                        Self::deposit_event(Event::SettlementRejected {
+                            order_id: *order_id,
+                            reason: b"AssetNotFound".to_vec(),
+                        });
+                        Error::<T>::AssetNotFound
+                    })?;
+                    ensure!(asset.core.owner == order.seller, {
+                        Self::deposit_event(Event::SettlementRejected {
+                            order_id: *order_id,
+                            reason: b"OwnershipMismatch".to_vec(),
+                        });
+                        Error::<T>::NotOwner
+                    });
+                    ensure!(!asset.is_locked(), {
+                        Self::deposit_event(Event::SettlementRejected {
+                            order_id: *order_id,
+                            reason: b"AssetLocked".to_vec(),
+                        });
+                        Error::<T>::AssetLocked
+                    });
+                }
+                TradeAssetType::Certificate => {
+                    let parent_asset = order.parent_asset_id.ok_or({
+                        Self::deposit_event(Event::SettlementRejected {
+                            order_id: *order_id,
+                            reason: b"AssetNotFound".to_vec(),
+                        });
+                        Error::<T>::AssetNotFound
+                    })?;
+                    let cert = Self::get_certificate(&parent_asset, object_id)
+                        .ok_or({
+                            Self::deposit_event(Event::SettlementRejected {
+                                order_id: *order_id,
+                                reason: b"CertificateNotFound".to_vec(),
+                            });
+                            Error::<T>::CertificateNotFound
+                        })?;
+                    ensure!(cert.owner == order.seller, {
+                        Self::deposit_event(Event::SettlementRejected {
+                            order_id: *order_id,
+                            reason: b"OwnershipMismatch".to_vec(),
+                        });
+                        Error::<T>::NotOwner
+                    });
+                    ensure!(
+                        cert.is_valid(Self::current_timestamp()),
+                        {
+                            Self::deposit_event(Event::SettlementRejected {
+                                order_id: *order_id,
+                                reason: b"ObjectPermanentlyInvalid".to_vec(),
+                            });
+                            Error::<T>::CertificateNotActive
+                        }
+                    );
+                }
+            }
+
+            // 条件 6（签名）由 Substrate 框架保证，无需显式检查
+
+            Ok(order)
+        }
+
+        /// 纯写入：转移资产所有权（验证已前置完成）
+        fn do_transfer_asset(
+            asset_id: &[u8; 32],
+            _market_account: &T::AccountId,  // 已由 verify_settle_prerequisites 验证授权
+            new_owner: &T::AccountId,
+        ) -> Result<T::AccountId, DispatchError> {
+            let mut asset = Self::get_asset(asset_id).ok_or(Error::<T>::AssetNotFound)?;
+            let old_owner = asset.core.owner.clone();
+            asset.core.owner = new_owner.clone();
+            asset.core.nonce += 1;
+            asset.core.status = AssetStatus::Private;
+            asset.core.updated_at = Self::current_timestamp();
+            Self::insert_asset(asset_id, &asset)?;
+            AssetApprovals::<T>::remove(asset_id);
+            T::IncentiveHandler::register_asset_trade(asset_id);
+            Self::deposit_event(Event::AssetTransferred {
+                asset_id: *asset_id,
+                from: old_owner.clone(),
+                to: new_owner.clone(),
+            });
+            Ok(old_owner)
+        }
+
+        /// 纯写入：转移权证（验证已前置完成）
+        fn do_transfer_certificate(
+            asset_id: &[u8; 32],
+            certificate_id: &[u8; 32],
+            _current_owner: &T::AccountId,  // 已由 verify_settle_prerequisites 验证权属
+            new_owner: &T::AccountId,
+        ) -> Result<T::AccountId, DispatchError> {
+            let mut certificate = Self::get_certificate(asset_id, certificate_id)
+                .ok_or(Error::<T>::CertificateNotFound)?;
+            let old_owner = certificate.owner.clone();
+            certificate.owner = new_owner.clone();
+            certificate.nonce = certificate.nonce.saturating_add(1);
+            Self::update_certificate(asset_id, &certificate)?;
+            T::IncentiveHandler::register_asset_trade(asset_id);
+            Self::deposit_event(Event::CertificateTransferred {
+                asset_id: *asset_id,
+                certificate_id: *certificate_id,
+                from: old_owner.clone(),
+                to: new_owner.clone(),
+            });
+            Ok(old_owner)
         }
 
         fn transfer_asset_by_market_state(
@@ -1117,8 +1401,14 @@ pub mod pallet {
             market_account: &T::AccountId,
             buyer: &T::AccountId,
             price: BalanceOf<T>,
+            order_id: &[u8; 32],
+            order_digest: &[u8; 32],
         ) -> Result<[u8; 32], DispatchError> {
-            let seller = Self::transfer_asset_by_market_state(asset_id, market_account, buyer)?;
+            Self::verify_settle_prerequisites(
+                order_id, order_digest, market_account,
+                TradeAssetType::DataAsset, asset_id,
+            )?;
+            let seller = Self::do_transfer_asset(asset_id, market_account, buyer)?;
             let trade_id = Self::record_trade_settlement(
                 market_account,
                 &seller,
@@ -1127,7 +1417,10 @@ pub mod pallet {
                 &[0u8; 32],
                 TradeAssetType::DataAsset,
                 price,
-            );
+                order_id,
+                order_digest,
+                crate::types::RightAction::TransferAsset,
+            )?;
             Ok(trade_id)
         }
 
@@ -1181,6 +1474,7 @@ pub mod pallet {
             let certificate_id = certificate.certificate_id;
 
             Self::insert_certificate(asset_id, &certificate)?;
+            ActiveCertificateCount::<T>::mutate(asset_id, |count| *count = count.saturating_add(1));
             T::IncentiveHandler::register_asset_trade(asset_id);
 
             Self::deposit_event(Event::CertificateIssued {
@@ -1214,9 +1508,16 @@ pub mod pallet {
             market_account: &T::AccountId,
             buyer: &T::AccountId,
             price: BalanceOf<T>,
+            order_id: &[u8; 32],
+            order_digest: &[u8; 32],
         ) -> Result<[u8; 32], DispatchError> {
-            let seller =
-                Self::transfer_certificate_state(asset_id, certificate_id, market_account, buyer)?;
+            Self::verify_settle_prerequisites(
+                order_id, order_digest, market_account,
+                TradeAssetType::Certificate, certificate_id,
+            )?;
+            let seller = Self::do_transfer_certificate(
+                asset_id, certificate_id, market_account, buyer,
+            )?;
             let trade_id = Self::record_trade_settlement(
                 market_account,
                 &seller,
@@ -1225,7 +1526,10 @@ pub mod pallet {
                 certificate_id,
                 TradeAssetType::Certificate,
                 price,
-            );
+                order_id,
+                order_digest,
+                crate::types::RightAction::TransferRight,
+            )?;
             Ok(trade_id)
         }
     }

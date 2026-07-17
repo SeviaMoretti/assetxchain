@@ -10,10 +10,13 @@ use sp_runtime::DispatchError;
 
 // 定义 Function IDs
 const TRANSFER_ASSET_FUNC_ID: u16 = 1;
-const TRANSFER_CERT_FUNC_ID: u16 = 2; // 新增：转移权证
-const ISSUE_CERT_FUNC_ID: u16 = 3; // 新增：发行权证
+const TRANSFER_CERT_FUNC_ID: u16 = 2;
+const ISSUE_CERT_FUNC_ID: u16 = 3;
 const SETTLE_ASSET_TRADE_FUNC_ID: u16 = 4;
 const SETTLE_CERT_TRADE_FUNC_ID: u16 = 5;
+const CREATE_ORDER_PROJECTION_FUNC_ID: u16 = 6;
+const LOCK_ORDER_FUNC_ID: u16 = 7;
+const UPDATE_ORDER_STATUS_FUNC_ID: u16 = 8;
 const TRANSFER_FAILED_STATUS: u32 = 1;
 const ASSET_NOT_FOUND_STATUS: u32 = 2;
 const PERMISSION_DENIED_STATUS: u32 = 3;
@@ -129,10 +132,12 @@ where
             SETTLE_ASSET_TRADE_FUNC_ID => {
                 log::debug!(target: "runtime", "DataAssetsExtension: Calling SETTLE_ASSET_TRADE_FUNC_ID");
                 let mut env = env.buf_in_buf_out();
-                let (asset_id, to_account, price): (
+                let (asset_id, to_account, price, order_id, order_digest): (
                     [u8; 32],
                     T::AccountId,
                     pallet_dataassets::BalanceOf<T>,
+                    [u8; 32],
+                    [u8; 32],
                 ) = env.read_as()?;
                 let caller_account = env.ext().address().clone();
 
@@ -141,6 +146,8 @@ where
                     &caller_account,
                     &to_account,
                     price,
+                    &order_id,
+                    &order_digest,
                 ) {
                     Ok(_) => Ok(RetVal::Converging(0)),
                     Err(error) => Ok(RetVal::Converging(dataassets_error_status::<T>(error))),
@@ -149,11 +156,13 @@ where
             SETTLE_CERT_TRADE_FUNC_ID => {
                 log::debug!(target: "runtime", "DataAssetsExtension: Calling SETTLE_CERT_TRADE_FUNC_ID");
                 let mut env = env.buf_in_buf_out();
-                let (asset_id, certificate_id, to_account, price): (
+                let (asset_id, certificate_id, to_account, price, order_id, order_digest): (
                     [u8; 32],
                     [u8; 32],
                     T::AccountId,
                     pallet_dataassets::BalanceOf<T>,
+                    [u8; 32],
+                    [u8; 32],
                 ) = env.read_as()?;
                 let caller_account = env.ext().address().clone();
 
@@ -163,10 +172,72 @@ where
                     &caller_account,
                     &to_account,
                     price,
+                    &order_id,
+                    &order_digest,
                 ) {
                     Ok(_) => Ok(RetVal::Converging(0)),
                     Err(error) => Ok(RetVal::Converging(dataassets_error_status::<T>(error))),
                 }
+            }
+            CREATE_ORDER_PROJECTION_FUNC_ID => {
+                log::debug!(target: "runtime", "DataAssetsExtension: Calling CREATE_ORDER_PROJECTION_FUNC_ID");
+                let mut env = env.buf_in_buf_out();
+                let (order_id, order_digest, object_type, object_id, parent_asset_id, seller, price): (
+                    [u8; 32],
+                    [u8; 32],
+                    pallet_dataassets::types::TradeAssetType,
+                    [u8; 32],
+                    Option<[u8; 32]>,
+                    T::AccountId,
+                    pallet_dataassets::BalanceOf<T>,
+                ) = env.read_as()?;
+                let caller = env.ext().address().clone();
+
+                let order = pallet_dataassets::types::MarketOrder {
+                    order_id,
+                    order_digest,
+                    market: caller,
+                    seller,
+                    buyer: None,
+                    object_type,
+                    object_id,
+                    parent_asset_id,
+                    price,
+                    status: pallet_dataassets::types::MarketOrderStatus::Open,
+                    created_at: frame_system::Pallet::<T>::block_number(),
+                };
+                pallet_dataassets::MarketOrders::<T>::insert(order_id, order);
+                Ok(RetVal::Converging(0))
+            }
+            LOCK_ORDER_FUNC_ID => {
+                log::debug!(target: "runtime", "DataAssetsExtension: Calling LOCK_ORDER_FUNC_ID");
+                let mut env = env.buf_in_buf_out();
+                let order_id: [u8; 32] = env.read_as()?;
+                let caller = env.ext().address().clone();
+
+                pallet_dataassets::MarketOrders::<T>::try_mutate(&order_id, |maybe_order| -> Result<(), DispatchError> {
+                    let order = maybe_order.as_mut().ok_or(DispatchError::Other("OrderNotFound"))?;
+                    if order.status != pallet_dataassets::types::MarketOrderStatus::Open {
+                        return Err(DispatchError::Other("OrderNotOpen"));
+                    }
+                    order.status = pallet_dataassets::types::MarketOrderStatus::Locked;
+                    order.buyer = Some(caller);
+                    Ok(())
+                })?;
+                Ok(RetVal::Converging(0))
+            }
+            UPDATE_ORDER_STATUS_FUNC_ID => {
+                log::debug!(target: "runtime", "DataAssetsExtension: Calling UPDATE_ORDER_STATUS_FUNC_ID");
+                let mut env = env.buf_in_buf_out();
+                let (order_id, new_status): ([u8; 32], pallet_dataassets::types::MarketOrderStatus) =
+                    env.read_as()?;
+
+                pallet_dataassets::MarketOrders::<T>::try_mutate(&order_id, |maybe_order| -> Result<(), DispatchError> {
+                    let order = maybe_order.as_mut().ok_or(DispatchError::Other("OrderNotFound"))?;
+                    order.status = new_status;
+                    Ok(())
+                })?;
+                Ok(RetVal::Converging(0))
             }
             _ => Err(DispatchError::Other("Unregistered function")),
         }

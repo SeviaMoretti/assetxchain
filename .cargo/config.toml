@@ -1,2 +1,5 @@
 [net]
 git-fetch-with-cli = true
+
+[env]
+WASM_BUILD_RUSTFLAGS = "-C link-arg=--allow-undefined"

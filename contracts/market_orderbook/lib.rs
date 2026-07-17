@@ -6,6 +6,8 @@ use market_standard::{DataAssetsExtError, MarketStandard};
 #[ink::contract(env = market_standard::CustomEnvironment)]
 mod market_orderbook {
     use super::*;
+    use codec::Encode;
+    use ink::env::hash::Blake2x256;
     use ink::storage::Mapping;
 
     /// 订单资产类型
@@ -51,6 +53,7 @@ mod market_orderbook {
         pub status: OrderStatus,
         pub created_at: BlockNumber,
         pub settled_at: Option<BlockNumber>,
+        pub order_id: Option<[u8; 32]>,
     }
 
     #[ink(storage)]
@@ -147,6 +150,72 @@ mod market_orderbook {
             }
         }
 
+        /// 生成订单投影所需的 order_id 和 order_digest，
+        /// 并通过 Chain Extension 写入运行时侧 MarketOrders 存储。
+        fn create_order_projection(
+            &self,
+            object_type: u8,
+            object_id: [u8; 32],
+            parent_asset_id: Option<[u8; 32]>,
+            seller: AccountId,
+            price: Balance,
+        ) -> Result<([u8; 32], [u8; 32]), Error> {
+            let block_number = self.env().block_number();
+
+            // order_id = blake2_256(asset_id/cert_id || seller || block_number)
+            let mut order_id_input = object_id.to_vec();
+            order_id_input.extend_from_slice(&seller.encode());
+            order_id_input.extend_from_slice(&block_number.to_le_bytes());
+            let mut order_id = [0u8; 32];
+            ink::env::hash_bytes::<Blake2x256>(&order_id_input, &mut order_id);
+
+            // order_digest = blake2_256(order_id || seller || price || object_type || object_id)
+            let mut digest_input = order_id.to_vec();
+            digest_input.extend_from_slice(&seller.encode());
+            digest_input.extend_from_slice(&price.to_le_bytes());
+            digest_input.push(object_type);
+            digest_input.extend_from_slice(&object_id);
+            let mut order_digest = [0u8; 32];
+            ink::env::hash_bytes::<Blake2x256>(&digest_input, &mut order_digest);
+
+            self.env()
+                .extension()
+                .create_order_projection(
+                    order_id,
+                    order_digest,
+                    object_type,
+                    object_id,
+                    parent_asset_id,
+                    seller,
+                    price,
+                )
+                .map_err(|e| Error::ChainExtension(e))?;
+
+            Ok((order_id, order_digest))
+        }
+
+        /// 从订单字段重新计算 order_digest，供结算时传入运行时验证。
+        fn compute_order_digest(&self, order: &Order) -> [u8; 32] {
+            let oid = order.order_id.unwrap_or([0u8; 32]);
+            let object_type = match order.asset_type {
+                AssetType::DataAsset => 0u8,
+                AssetType::Certificate => 1u8,
+            };
+            let object_id = if order.asset_type == AssetType::Certificate && order.certificate_id != [0u8; 32] {
+                order.certificate_id
+            } else {
+                order.asset_id
+            };
+            let mut digest_input = oid.to_vec();
+            digest_input.extend_from_slice(&order.seller.encode());
+            digest_input.extend_from_slice(&order.price.to_le_bytes());
+            digest_input.push(object_type);
+            digest_input.extend_from_slice(&object_id);
+            let mut order_digest = [0u8; 32];
+            ink::env::hash_bytes::<Blake2x256>(&digest_input, &mut order_digest);
+            order_digest
+        }
+
         /// 【非标准接口】用户必须先调用此方法设置价格，然后调用 standard 的 asset_enter
         /// 或者在此方法内部调用 asset_enter 逻辑
         #[ink(message)]
@@ -161,7 +230,7 @@ mod market_orderbook {
             let caller = self.env().caller();
 
             // 记录订单
-            let order = Order {
+            let mut order = Order {
                 seller: caller,
                 buyer: None,
                 price,
@@ -173,7 +242,21 @@ mod market_orderbook {
                 status: OrderStatus::Listed,
                 created_at: self.env().block_number(),
                 settled_at: None,
+                order_id: None,
             };
+            self.orders.insert(asset_id, &order);
+
+            // 写入运行时侧订单投影
+            let (order_id, _order_digest) = self.create_order_projection(
+                0u8,         // DataAsset
+                asset_id,
+                None,        // no parent for DataAsset
+                caller,
+                price,
+            )?;
+
+            // 保存 order_id 到合约端订单
+            order.order_id = Some(order_id);
             self.orders.insert(asset_id, &order);
 
             // 触发标准中的进入逻辑（如果需要额外的状态变更是写在这里）
@@ -207,12 +290,24 @@ mod market_orderbook {
             order.buyer = Some(caller);
             self.orders.insert(asset_id, &order);
 
+            // 运行时侧 Lock（使用合约端存储的 order_id）
+            if let Some(oid) = order.order_id {
+                if let Err(e) = self.env().extension().lock_order(oid) {
+                    order.status = OrderStatus::Listed;
+                    order.buyer = None;
+                    self.orders.insert(asset_id, &order);
+                    return Err(Error::ChainExtension(e));
+                }
+            }
+
             // 1. 先调用 Chain Extension 转移资产给买家，避免资产转移失败后仍给卖家付款。
             // 合约 (Self) -> 买家 (Caller)
+            let order_id = order.order_id.unwrap_or([0u8; 32]);
+            let order_digest = self.compute_order_digest(&order);
             if let Err(e) = self
                 .env()
                 .extension()
-                .settle_asset_trade(asset_id, caller, order.price)
+                .settle_asset_trade(asset_id, caller, order.price, order_id, order_digest)
             {
                 order.status = OrderStatus::Failed;
                 order.settled_at = None;
@@ -232,6 +327,11 @@ mod market_orderbook {
             order.status = OrderStatus::Settled;
             order.settled_at = Some(self.env().block_number());
             self.orders.insert(asset_id, &order);
+
+            // 运行时侧更新订单状态为 Settled
+            if let Some(oid) = order.order_id {
+                let _ = self.env().extension().update_order_status(oid, 2u8); // 2=Settled
+            }
 
             // 4. 报告交易结果 (Standard Trait)
             // 现在生成一个假的 trade_id 用于演示
@@ -261,7 +361,7 @@ mod market_orderbook {
             }
 
             let seller = self.env().caller();
-            let order = Order {
+            let mut order = Order {
                 seller,
                 buyer: None,
                 price,
@@ -273,7 +373,19 @@ mod market_orderbook {
                 status: OrderStatus::Listed,
                 created_at: self.env().block_number(),
                 settled_at: None,
+                order_id: None,
             };
+            self.certificate_orders.insert(order_key, &order);
+
+            // 写入运行时侧订单投影
+            let (order_id, _order_digest) = self.create_order_projection(
+                1u8,                // Certificate
+                certificate_id,
+                Some(asset_id),     // parent asset
+                seller,
+                price,
+            )?;
+            order.order_id = Some(order_id);
             self.certificate_orders.insert(order_key, &order);
 
             self.env().emit_event(CertificateListed {
@@ -300,7 +412,7 @@ mod market_orderbook {
             }
 
             let seller = self.env().caller();
-            let order = Order {
+            let mut order = Order {
                 seller,
                 buyer: None,
                 price,
@@ -312,7 +424,19 @@ mod market_orderbook {
                 status: OrderStatus::Listed,
                 created_at: self.env().block_number(),
                 settled_at: None,
+                order_id: None,
             };
+            self.orders.insert(asset_id, &order);
+
+            // 写入运行时侧订单投影
+            let (order_id, _order_digest) = self.create_order_projection(
+                1u8,                // Certificate
+                asset_id,           // 发行型订单以 asset_id 为 object_id（权证尚未创建）
+                Some(asset_id),
+                seller,
+                price,
+            )?;
+            order.order_id = Some(order_id);
             self.orders.insert(asset_id, &order);
 
             self.env().emit_event(CertificateListed {
@@ -344,6 +468,16 @@ mod market_orderbook {
             order.buyer = Some(buyer);
             self.orders.insert(asset_id, &order);
 
+            // 运行时侧 Lock
+            if let Some(oid) = order.order_id {
+                if let Err(e) = self.env().extension().lock_order(oid) {
+                    order.status = OrderStatus::Listed;
+                    order.buyer = None;
+                    self.orders.insert(asset_id, &order);
+                    return Err(Error::ChainExtension(e));
+                }
+            }
+
             if let Err(e) = self.env().extension().issue_certificate(
                 asset_id,
                 order.seller,
@@ -367,6 +501,9 @@ mod market_orderbook {
             order.status = OrderStatus::Settled;
             order.settled_at = Some(self.env().block_number());
             self.orders.insert(asset_id, &order);
+            if let Some(oid) = order.order_id {
+                let _ = self.env().extension().update_order_status(oid, 2u8);
+            }
             self.report_trade_result([3u8; 32], true);
 
             self.env().emit_event(CertificateSold {
@@ -406,11 +543,25 @@ mod market_orderbook {
             order.buyer = Some(buyer);
             self.certificate_orders.insert(order_key, &order);
 
+            // 运行时侧 Lock
+            if let Some(oid) = order.order_id {
+                if let Err(e) = self.env().extension().lock_order(oid) {
+                    order.status = OrderStatus::Listed;
+                    order.buyer = None;
+                    self.certificate_orders.insert(order_key, &order);
+                    return Err(Error::ChainExtension(e));
+                }
+            }
+
+            let order_id = order.order_id.unwrap_or([0u8; 32]);
+            let order_digest = self.compute_order_digest(&order);
             if let Err(e) = self.env().extension().settle_certificate_trade(
                 asset_id,
                 certificate_id,
                 buyer,
                 order.price,
+                order_id,
+                order_digest,
             ) {
                 order.status = OrderStatus::Failed;
                 order.settled_at = None;
@@ -428,6 +579,9 @@ mod market_orderbook {
             order.status = OrderStatus::Settled;
             order.settled_at = Some(self.env().block_number());
             self.certificate_orders.insert(order_key, &order);
+            if let Some(oid) = order.order_id {
+                let _ = self.env().extension().update_order_status(oid, 2u8);
+            }
             self.report_trade_result([2u8; 32], true);
 
             self.env().emit_event(CertificateSold {
@@ -583,6 +737,9 @@ mod market_orderbook {
                         || func_id == market_standard::ISSUE_CERT_FUNC_ID as u16
                         || func_id == market_standard::SETTLE_ASSET_TRADE_FUNC_ID as u16
                         || func_id == market_standard::SETTLE_CERT_TRADE_FUNC_ID as u16
+                        || func_id == market_standard::CREATE_ORDER_PROJECTION_FUNC_ID as u16
+                        || func_id == market_standard::LOCK_ORDER_FUNC_ID as u16
+                        || func_id == market_standard::UPDATE_ORDER_STATUS_FUNC_ID as u16
                 );
                 DataAssetsExtError::TransferFailed as u32
             }
@@ -604,8 +761,8 @@ mod market_orderbook {
                         *recorded.borrow_mut() = Some((func_id, asset_id, buyer));
                     });
                 } else if func_id == market_standard::SETTLE_ASSET_TRADE_FUNC_ID as u16 {
-                    let (asset_id, buyer, price) =
-                        <([u8; 32], AccountId, Balance)>::decode(&mut &payload[..])
+                    let (asset_id, buyer, price, order_id, order_digest) =
+                        <([u8; 32], AccountId, Balance, [u8; 32], [u8; 32])>::decode(&mut &payload[..])
                             .expect("valid asset settlement input");
                     RECORDED_ASSET_SETTLEMENT.with(|recorded| {
                         *recorded.borrow_mut() = Some((func_id, asset_id, buyer, price));
@@ -618,8 +775,8 @@ mod market_orderbook {
                         *recorded.borrow_mut() = Some((func_id, asset_id, certificate_id, buyer));
                     });
                 } else if func_id == market_standard::SETTLE_CERT_TRADE_FUNC_ID as u16 {
-                    let (asset_id, certificate_id, buyer, price) =
-                        <([u8; 32], [u8; 32], AccountId, Balance)>::decode(&mut &payload[..])
+                    let (asset_id, certificate_id, buyer, price, order_id, order_digest) =
+                        <([u8; 32], [u8; 32], AccountId, Balance, [u8; 32], [u8; 32])>::decode(&mut &payload[..])
                             .expect("valid certificate settlement input");
                     RECORDED_CERTIFICATE_SETTLEMENT.with(|recorded| {
                         *recorded.borrow_mut() =
@@ -635,6 +792,11 @@ mod market_orderbook {
                         *recorded.borrow_mut() =
                             Some((func_id, asset_id, issuer, buyer, right_type, valid_until));
                     });
+                } else if func_id == market_standard::CREATE_ORDER_PROJECTION_FUNC_ID as u16
+                    || func_id == market_standard::LOCK_ORDER_FUNC_ID as u16
+                    || func_id == market_standard::UPDATE_ORDER_STATUS_FUNC_ID as u16
+                {
+                    // 新增投影/锁/更新方法，直接成功
                 } else {
                     panic!("unexpected function id {func_id}");
                 }

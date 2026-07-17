@@ -14,6 +14,9 @@ pub const TRANSFER_CERT_FUNC_ID: u32 = 2; // 权证转移方法ID
 pub const ISSUE_CERT_FUNC_ID: u32 = 3; // 权证发行方法ID
 pub const SETTLE_ASSET_TRADE_FUNC_ID: u32 = 4; // 元证成交结算方法ID
 pub const SETTLE_CERT_TRADE_FUNC_ID: u32 = 5; // 权证成交结算方法ID
+pub const CREATE_ORDER_PROJECTION_FUNC_ID: u32 = 6; // 订单投影创建方法ID
+pub const LOCK_ORDER_FUNC_ID: u32 = 7; // 订单锁定方法ID
+pub const UPDATE_ORDER_STATUS_FUNC_ID: u32 = 8; // 订单状态更新方法ID
                                               // 链扩展错误码
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Encode, Decode, TypeInfo)]
 #[cfg_attr(feature = "std", derive(serde::Serialize, serde::Deserialize))]
@@ -84,6 +87,8 @@ pub trait DataAssetsExt {
         asset_id: [u8; 32],
         to: AccountId,
         price: Balance,
+        order_id: [u8; 32],
+        order_digest: [u8; 32],
     ) -> Result<(), DataAssetsExtError>;
 
     /// 结算权证交易并记录成交证据
@@ -94,7 +99,32 @@ pub trait DataAssetsExt {
         certificate_id: [u8; 32],
         to: AccountId,
         price: Balance,
+        order_id: [u8; 32],
+        order_digest: [u8; 32],
     ) -> Result<(), DataAssetsExtError>;
+
+    /// 创建订单投影——将订单关键字段写入运行时侧 MarketOrders 存储
+    /// 对应 Runtime 中的 func_id = 6
+    #[ink(function = 6)]
+    fn create_order_projection(
+        order_id: [u8; 32],
+        order_digest: [u8; 32],
+        object_type: u8,
+        object_id: [u8; 32],
+        parent_asset_id: Option<[u8; 32]>,
+        seller: AccountId,
+        price: Balance,
+    ) -> Result<(), DataAssetsExtError>;
+
+    /// 锁定订单——运行时侧原子的 Open→Locked 状态转换
+    /// 对应 Runtime 中的 func_id = 7
+    #[ink(function = 7)]
+    fn lock_order(order_id: [u8; 32]) -> Result<(), DataAssetsExtError>;
+
+    /// 更新订单状态
+    /// 对应 Runtime 中的 func_id = 8
+    #[ink(function = 8)]
+    fn update_order_status(order_id: [u8; 32], new_status: u8) -> Result<(), DataAssetsExtError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -266,13 +296,15 @@ mod tests {
         let accounts = test::default_accounts::<CustomEnvironment>();
         let asset_id = [10u8; 32];
         let price = 500u128;
+        let order_id = [1u8; 32];
+        let order_digest = [2u8; 32];
 
         ink::EnvAccess::<CustomEnvironment>::default()
             .extension()
-            .settle_asset_trade(asset_id, accounts.bob, price)
+            .settle_asset_trade(asset_id, accounts.bob, price, order_id, order_digest)
             .expect("asset trade settlement succeeds");
 
-        let expected_payload = (asset_id, accounts.bob, price).encode();
+        let expected_payload = (asset_id, accounts.bob, price, order_id, order_digest).encode();
         let expected_input = expected_payload.encode();
         CERTIFICATE_TRANSFER_CALL.with(|call| {
             assert_eq!(
@@ -291,13 +323,15 @@ mod tests {
         let asset_id = [11u8; 32];
         let certificate_id = [12u8; 32];
         let price = 250u128;
+        let order_id = [3u8; 32];
+        let order_digest = [4u8; 32];
 
         ink::EnvAccess::<CustomEnvironment>::default()
             .extension()
-            .settle_certificate_trade(asset_id, certificate_id, accounts.bob, price)
+            .settle_certificate_trade(asset_id, certificate_id, accounts.bob, price, order_id, order_digest)
             .expect("certificate trade settlement succeeds");
 
-        let expected_payload = (asset_id, certificate_id, accounts.bob, price).encode();
+        let expected_payload = (asset_id, certificate_id, accounts.bob, price, order_id, order_digest).encode();
         let expected_input = expected_payload.encode();
         CERTIFICATE_TRANSFER_CALL.with(|call| {
             assert_eq!(

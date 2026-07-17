@@ -85,6 +85,59 @@ pub struct TradeSettlement<AccountId, Balance, BlockNumber> {
 	pub settled_at: BlockNumber,
 }
 
+/// 运行时侧的订单最小投影。
+/// 合约在创建订单后通过 Chain Extension (func_id=6) 写入，
+/// 运行时结算时读取此投影进行验证。
+#[derive(Encode, Decode, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen)]
+pub struct MarketOrder<AccountId, Balance, BlockNumber> {
+	pub order_id: [u8; 32],
+	pub order_digest: [u8; 32],
+	pub market: AccountId,
+	pub seller: AccountId,
+	pub buyer: Option<AccountId>,
+	pub object_type: TradeAssetType,
+	pub object_id: [u8; 32],
+	pub parent_asset_id: Option<[u8; 32]>,
+	pub price: Balance,
+	pub status: MarketOrderStatus,
+	pub created_at: BlockNumber,
+}
+
+/// 订单投影的状态机
+#[derive(Encode, Decode, Clone, Copy, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen)]
+pub enum MarketOrderStatus {
+	Open,
+	Locked,
+	Settled,
+	Canceled,
+}
+
+/// 以 order_id 为主键的标准化结算记录
+#[derive(Encode, Decode, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen)]
+pub struct SettlementRecord<AccountId, Balance, BlockNumber> {
+	pub trade_id: [u8; 32],
+	pub order_id: [u8; 32],
+	pub market: AccountId,
+	pub seller: AccountId,
+	pub buyer: AccountId,
+	pub asset_id: [u8; 32],
+	pub certificate_id: [u8; 32],
+	pub object_type: TradeAssetType,
+	pub right_action: RightAction,
+	pub price: Balance,
+	pub order_digest: [u8; 32],
+	pub settled_at: BlockNumber,
+	pub state_root_at_settlement: sp_core::H256,
+}
+
+/// 结算中权属变更的类型，支撑审计时区分"使用权新增"和"使用权流转"
+#[derive(Encode, Decode, Clone, Copy, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen)]
+pub enum RightAction {
+	TransferAsset,   // MetaToken 所有权转移
+	IssueRight,      // RightToken 发行（新增使用权）
+	TransferRight,   // RightToken 转让（使用权流转）
+}
+
 // ---- Main structures ----
 
 /// Data Asset Structure
